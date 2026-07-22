@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
-from gca.model_config import (
-    ModelConfigError,
-    build_registry_from_catalog,
-    default_model_config_paths,
-    load_dotenv,
-    load_model_catalog,
-)
-from gca.models import ModelProfile, ModelRegistry
+from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
+from gca.jobs.queue import SqliteJobQueue
+from gca.jobs.runner import JobRunner
+from gca.jobs.store import SqliteJobStore
+from gca.model_loading import load_runtime_models
 from gca.plugins import LoadedPlugins
-from gca.providers.scripted import ScriptedProvider
 from gca.repo_config import RepoConfigError, load_repo_config
-from gca.runtime import RuntimeConfig, create_coordinator, load_configured_plugins
+from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import SessionStore
 
 
@@ -55,49 +50,14 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
     )
 
 
-def _load_dotenv_files(config: RuntimeConfig) -> None:
-    load_dotenv(Path.home() / ".gca" / ".env")
-    load_dotenv(config.workspace / ".env")
-    load_dotenv(config.workspace / ".gca" / ".env")
-
-
 def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugins:
-    _load_dotenv_files(config)
-    loaded = load_configured_plugins(config)
-
-    catalog_paths = list(default_model_config_paths(config.workspace))
-    if config.models_paths:
-        catalog_paths.extend(config.models_paths)
     try:
-        catalog = load_model_catalog(catalog_paths)
-        catalog_models = build_registry_from_catalog(catalog)
-    except ModelConfigError as exc:
-        raise SystemExit(f"Invalid models.yaml: {exc}") from exc
-
-    # YAML first; plugins override same-named models as an escape hatch.
-    merged = ModelRegistry()
-    merged.extend(catalog_models)
-    merged.extend(loaded.models)
-    loaded.models = merged
-
-    if len(loaded.models) == 0 and args.script:
-        data = json.loads(Path(args.script).read_text(encoding="utf-8"))
-        provider = ScriptedProvider.from_script(data)
-        loaded.models.register(
-            ModelProfile(
-                name="scripted",
-                provider=provider,
-                strength=3,
-                speed=5,
-                cost=1,
-            )
+        return load_runtime_models(
+            config,
+            script_path=Path(args.script) if args.script else None,
         )
-    if len(loaded.models) > 0:
-        return loaded
-    raise SystemExit(
-        "No models configured. Add a models.yaml catalog, supply --plugins with "
-        "get_models()/get_provider(), or use --script PATH for the scripted provider."
-    )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _event_printer(message: str) -> None:
@@ -181,6 +141,60 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_job_run(args: argparse.Namespace) -> int:
+    """Run one repository job through the same worker path used by the service."""
+
+    job_root = Path(args.job_root).resolve()
+    store = SqliteJobStore(job_root / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    spec = RunSpec(
+        task=args.task,
+        repository=RepositorySpec(
+            url=args.repository,
+            ref=args.ref,
+            shallow_depth=args.shallow_depth,
+        ),
+        workflow=args.workflow,
+        max_steps=args.max_steps,
+    )
+    job = store.create(spec, idempotency_key=args.idempotency_key)
+    if job.status != JobStatus.QUEUED:
+        print(f"job: {job.id}")
+        print(f"status: {job.status.value}")
+        return 0 if job.status == JobStatus.COMPLETED else 1
+    queue.enqueue(job.id)
+    claimed = queue.claim("local-cli", lease_seconds=args.lease_seconds)
+    if claimed is None:
+        raise SystemExit("job could not be claimed")
+
+    script_path = Path(args.script).resolve() if args.script else None
+
+    def model_loader(config: RuntimeConfig) -> LoadedPlugins:
+        return load_runtime_models(config, script_path=script_path)
+
+    runner = JobRunner(
+        store=store,
+        workspace_root=job_root / "workspaces",
+        model_loader=model_loader,
+        allowed_repository_hosts=frozenset(args.allowed_host or []),
+        allow_local_repositories=args.allow_local_repository,
+        plugin_dir=Path(args.plugins).resolve() if args.plugins else None,
+        skill_dirs=[Path(value).resolve() for value in args.skills or []] or None,
+        model_paths=[Path(value).resolve() for value in args.models or []] or None,
+        on_event=_event_printer,
+    )
+    result = runner.execute(claimed)
+    print(f"job: {result.id}")
+    print(f"status: {result.status.value}")
+    if result.session_id:
+        print(f"session: {result.session_id}")
+    if result.workspace_path:
+        print(f"workspace: {result.workspace_path}")
+    if result.last_error:
+        print(f"error: {result.last_error}")
+    return 0 if result.status == JobStatus.COMPLETED else 1
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", default=".", help="Workspace root (default: cwd).")
     parser.add_argument("--sessions-dir", default=None, help="Where to store sessions.")
@@ -230,6 +244,30 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="Validate repository configuration offline.")
     _add_common(validate)
     validate.set_defaults(func=_cmd_validate)
+
+    job = sub.add_parser("job", help="Run durable repository jobs.")
+    job_commands = job.add_subparsers(dest="job_command", required=True)
+    job_run = job_commands.add_parser("run", help="Clone and run one repository task.")
+    job_run.add_argument("task", help="Task description for the agent.")
+    job_run.add_argument("--repository", required=True, help="HTTPS, SSH, or allowed local repo.")
+    job_run.add_argument("--ref", default="main", help="Branch or tag to clone.")
+    job_run.add_argument("--shallow-depth", type=int, default=1)
+    job_run.add_argument("--job-root", default=".gca/jobs")
+    job_run.add_argument("--idempotency-key", default=None)
+    job_run.add_argument("--lease-seconds", type=int, default=900)
+    job_run.add_argument("--allowed-host", action="append", default=None)
+    job_run.add_argument("--allow-local-repository", action="store_true")
+    job_run.add_argument("--plugins", default=None)
+    job_run.add_argument("--models", action="append", default=None)
+    job_run.add_argument("--skills", action="append", default=None)
+    job_run.add_argument("--script", default=None)
+    job_run.add_argument("--max-steps", type=int, default=None)
+    job_run.add_argument(
+        "--workflow",
+        choices=["auto", "fast", "feature"],
+        default=None,
+    )
+    job_run.set_defaults(func=_cmd_job_run)
 
     return parser
 
