@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from gca.cli import _build_config, _load_models, build_parser, main
+from gca.cli import _build_config, _load_models, _tool_secret_grants, build_parser, main
 from gca.jobs.store import SqliteJobStore
 
 
@@ -42,6 +42,12 @@ def test_cli_runs_fast_scripted_workflow(tmp_path: Path) -> None:
     )
 
     assert result == 0
+
+
+def test_cli_tool_secret_grants_are_exact_tool_bindings() -> None:
+    assert _tool_secret_grants(["run_tests=DATABASE_URL", "run_tests=CACHE_TOKEN"]) == {
+        "run_tests": frozenset({"DATABASE_URL", "CACHE_TOKEN"}),
+    }
 
 
 def test_cli_loads_models_yaml_without_plugins(tmp_path: Path, monkeypatch: object) -> None:

@@ -192,9 +192,7 @@ def _secret_grants(value: str) -> dict[str, dict[str, frozenset[str]]]:
             )
         project_tools: dict[str, frozenset[str]] = {}
         for tool, names in tools.items():
-            if not isinstance(tool, str) or (
-                tool != "*" and re.fullmatch(r"[a-z][a-z0-9_]*", tool) is None
-            ):
+            if not isinstance(tool, str) or re.fullmatch(r"[a-z][a-z0-9_]*", tool) is None:
                 raise ServiceConfigError(f"invalid tool secret grant name: {tool}")
             if not isinstance(names, list) or not all(
                 isinstance(name, str) and name.strip() for name in names

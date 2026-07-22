@@ -30,6 +30,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _tool_secret_grants(values: list[str] | None) -> dict[str, frozenset[str]]:
+    grants: dict[str, set[str]] = {}
+    for value in values or []:
+        tool, separator, secret = value.partition("=")
+        if separator != "=" or not tool.strip() or not secret.strip():
+            raise SystemExit("--allow-tool-secret must use TOOL=ENV_NAME")
+        grants.setdefault(tool.strip(), set()).add(secret.strip())
+    return {tool: frozenset(names) for tool, names in grants.items()}
+
+
 def _build_config(args: argparse.Namespace) -> RuntimeConfig:
     workspace = Path(args.workspace).resolve()
     try:
@@ -226,7 +236,7 @@ def _execute_local_job(
         plugin_dir=Path(args.plugins).resolve() if args.plugins else None,
         skill_dirs=[Path(value).resolve() for value in args.skills or []] or None,
         model_paths=[Path(value).resolve() for value in args.models or []] or None,
-        allowed_tool_secret_grants={"*": frozenset(args.allow_tool_secret or [])},
+        allowed_tool_secret_grants=_tool_secret_grants(args.allow_tool_secret),
         on_event=_event_printer,
     )
     result = runner.execute(claimed)
@@ -250,7 +260,12 @@ def _add_job_runtime_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--models", action="append", default=None)
     parser.add_argument("--skills", action="append", default=None)
     parser.add_argument("--script", default=None)
-    parser.add_argument("--allow-tool-secret", action="append", default=None)
+    parser.add_argument(
+        "--allow-tool-secret",
+        action="append",
+        default=None,
+        metavar="TOOL=ENV_NAME",
+    )
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:

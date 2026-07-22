@@ -247,7 +247,7 @@ class PublicationController:
             project = ""
         grants = self.tool_secret_grants.get(project, {})
         unauthorized = {
-            tool: sorted(secrets - grants.get(tool, frozenset()) - grants.get("*", frozenset()))
+            tool: sorted(secrets - grants.get(tool, frozenset()))
             for tool, secrets in repo_config.tools.secret_access.items()
         }
         unauthorized = {tool: secrets for tool, secrets in unauthorized.items() if secrets}

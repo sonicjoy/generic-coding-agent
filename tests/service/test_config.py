@@ -62,3 +62,14 @@ def test_service_owned_tokens_cannot_be_granted_to_repository_tools() -> None:
                 ),
             }
         )
+
+
+def test_tool_secret_grants_reject_wildcard_tools() -> None:
+    with pytest.raises(ServiceConfigError, match="invalid tool secret grant"):
+        ServiceSettings.from_environment(
+            {
+                "GCA_API_TOKEN": "api-token-123456",
+                "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+                "GCA_TOOL_SECRET_GRANTS": ('{"github.com/owner/repo":{"*":["METRICS_TOKEN"]}}'),
+            }
+        )

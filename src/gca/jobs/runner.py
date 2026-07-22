@@ -121,11 +121,7 @@ class JobRunner:
                 runtime=replace(repo_config.runtime, profile="hosted"),
             )
         unauthorized_grants = {
-            tool: sorted(
-                secrets
-                - self.allowed_tool_secret_grants.get(tool, frozenset())
-                - self.allowed_tool_secret_grants.get("*", frozenset())
-            )
+            tool: sorted(secrets - self.allowed_tool_secret_grants.get(tool, frozenset()))
             for tool, secrets in repo_config.tools.secret_access.items()
         }
         unauthorized_grants = {
