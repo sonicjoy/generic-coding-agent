@@ -216,16 +216,10 @@ class PublicationController:
         policy: PublicationPolicy,
     ) -> None:
         configured_names = frozenset(
-            secret
-            for secrets in repo_config.tools.secret_access.values()
-            for secret in secrets
+            secret for secrets in repo_config.tools.secret_access.values() for secret in secrets
         )
-        configured_broker = CredentialBroker.from_environment(
-            include_names=configured_names
-        )
-        broker = CredentialBroker(
-            {**self.credentials.secrets, **configured_broker.secrets}
-        )
+        configured_broker = CredentialBroker.from_environment(include_names=configured_names)
+        broker = CredentialBroker({**self.credentials.secrets, **configured_broker.secrets})
         for name in policy.required_checks:
             command = repo_config.tools.fixed_commands.get(name)
             if command is None:

@@ -52,11 +52,7 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
         sessions_dir=sessions_dir,
         plugins_dir=plugins_dir,
         skill_dirs=skill_dirs,
-        max_steps=(
-            args.max_steps
-            if args.max_steps is not None
-            else repo_config.runtime.max_steps
-        ),
+        max_steps=(args.max_steps if args.max_steps is not None else repo_config.runtime.max_steps),
         workflow=args.workflow,
         models_paths=models_paths or None,
         repo_config=repo_config,
@@ -222,7 +218,7 @@ def _execute_local_job(
 
     runner = JobRunner(
         store=store,
-        workspace_root=job_root / "workspaces",
+        workspace_root=Path(args.job_root).resolve() / "workspaces",
         model_loader=model_loader,
         allowed_repository_hosts=frozenset(args.allowed_host or []),
         allow_local_repositories=args.allow_local_repository,

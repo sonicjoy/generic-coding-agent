@@ -219,9 +219,7 @@ def _execution_policy(config: RepoConfig) -> ExecutionPolicy:
 
 def _configured_secret_names(config: RepoConfig) -> frozenset[str]:
     return frozenset(
-        name
-        for secret_names in config.tools.secret_access.values()
-        for name in secret_names
+        name for secret_names in config.tools.secret_access.values() for name in secret_names
     )
 
 

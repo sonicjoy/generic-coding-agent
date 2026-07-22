@@ -88,9 +88,7 @@ class ServiceSettings:
                 if value
             ),
             plugin_dir=(
-                Path(values["GCA_PLUGIN_DIR"]).resolve()
-                if values.get("GCA_PLUGIN_DIR")
-                else None
+                Path(values["GCA_PLUGIN_DIR"]).resolve() if values.get("GCA_PLUGIN_DIR") else None
             ),
         )
         settings.validate()

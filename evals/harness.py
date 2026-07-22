@@ -139,10 +139,7 @@ def load_scenario(path: Path) -> EvalScenario:
         ),
         agents_md=raw.get("agents_md"),
         config_yaml=config_yaml,
-        initial_files={
-            str(relative): str(content)
-            for relative, content in initial_files.items()
-        },
+        initial_files={str(relative): str(content) for relative, content in initial_files.items()},
         scripts={str(name): list(steps) for name, steps in scripts.items()},
         model_profiles=[dict(profile) for profile in profiles],
         expect=dict(expect),

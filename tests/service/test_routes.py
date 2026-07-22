@@ -93,7 +93,7 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
     signature = (
         "sha256="
         + hmac.new(
-        b"webhook-secret-123456",
+            b"webhook-secret-123456",
             body,
             hashlib.sha256,
         ).hexdigest()

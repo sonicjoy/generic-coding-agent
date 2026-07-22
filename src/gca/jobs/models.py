@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from collections.abc import Mapping
 from typing import Any
 
 
@@ -121,7 +121,9 @@ class RunSpec:
         labels_raw = data.get("labels", {})
         if not isinstance(labels_raw, Mapping):
             raise ValueError("labels must be a mapping")
-        if not all(isinstance(key, str) and isinstance(value, str) for key, value in labels_raw.items()):
+        if not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in labels_raw.items()
+        ):
             raise ValueError("labels must be a string mapping")
         return cls(
             task=task,

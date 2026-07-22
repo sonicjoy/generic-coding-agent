@@ -176,12 +176,11 @@ class JobRunner:
 
     def _handle_failure(self, job: Job, exc: Exception) -> None:
         message = self.credentials.redact(f"{type(exc).__name__}: {exc}")
-        transient = isinstance(exc, (WorkspaceError, TimeoutError, ConnectionError)) or (
-            isinstance(exc, ProviderError) and exc.retryable
-        ) or (
-            isinstance(exc, IntegrationHttpError) and exc.retryable
-        ) or (
-            isinstance(exc, PublicationError) and exc.retryable
+        transient = (
+            isinstance(exc, (WorkspaceError, TimeoutError, ConnectionError))
+            or (isinstance(exc, ProviderError) and exc.retryable)
+            or (isinstance(exc, IntegrationHttpError) and exc.retryable)
+            or (isinstance(exc, PublicationError) and exc.retryable)
         )
         if transient and can_retry(job):
             transition_job(job, JobStatus.QUEUED, error=message)

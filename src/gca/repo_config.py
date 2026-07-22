@@ -253,9 +253,7 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
     except ValueError as exc:
         raise RepoConfigError(str(exc)) from exc
 
-    publication = _parse_publication(
-        _mapping(raw.get("publication", {}), "publication")
-    )
+    publication = _parse_publication(_mapping(raw.get("publication", {}), "publication"))
     return RepoConfig(
         workspace=workspace,
         version=version,
@@ -330,9 +328,7 @@ def _parse_tools(workspace: Path, raw: dict[str, Any]) -> ToolPolicyConfig:
         raise RepoConfigError(f"fixed commands are also denied: {', '.join(overlap)}")
     secrets_raw = _mapping(raw.get("secret_access", {}), "tools.secret_access")
     secret_access = {
-        tool_name: frozenset(
-            _string_list(secret_names, f"tools.secret_access.{tool_name}")
-        )
+        tool_name: frozenset(_string_list(secret_names, f"tools.secret_access.{tool_name}"))
         for tool_name, secret_names in secrets_raw.items()
     }
     for tool_name, secret_names in secret_access.items():
@@ -345,9 +341,7 @@ def _parse_tools(workspace: Path, raw: dict[str, Any]) -> ToolPolicyConfig:
                 f"{', '.join(invalid)}"
             )
     if "run_command" in secret_access:
-        raise RepoConfigError(
-            "run_command cannot receive secrets; use a fixed or integration tool"
-        )
+        raise RepoConfigError("run_command cannot receive secrets; use a fixed or integration tool")
     return ToolPolicyConfig(
         deny=deny,
         phases=phases,
@@ -433,15 +427,9 @@ def _parse_command_parameter(
     if kind == "boolean" and choices:
         raise RepoConfigError(f"boolean parameter {command}.{name} cannot declare choices")
     if kind != "boolean" and not choices:
-        raise RepoConfigError(
-            f"parameter {command}.{name} requires bounded choices"
-        )
-    if kind == "integer" and any(
-        re.fullmatch(r"-?[0-9]+", choice) is None for choice in choices
-    ):
-        raise RepoConfigError(
-            f"integer parameter {command}.{name} choices must be integers"
-        )
+        raise RepoConfigError(f"parameter {command}.{name} requires bounded choices")
+    if kind == "integer" and any(re.fullmatch(r"-?[0-9]+", choice) is None for choice in choices):
+        raise RepoConfigError(f"integer parameter {command}.{name} choices must be integers")
     return CommandParameterConfig(type=kind, flag=flag, choices=choices, required=required)
 
 

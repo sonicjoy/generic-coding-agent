@@ -279,9 +279,7 @@ class SqliteJobStore:
             for row in rows:
                 job = Job.from_dict(json.loads(str(row["data"])))
                 job.status = (
-                    JobStatus.QUEUED
-                    if job.attempt < job.max_attempts
-                    else JobStatus.FAILED
+                    JobStatus.QUEUED if job.attempt < job.max_attempts else JobStatus.FAILED
                 )
                 if job.status == JobStatus.FAILED:
                     job.last_error = "worker lease expired after final attempt"
@@ -431,10 +429,7 @@ def _validate_run_spec(spec: RunSpec) -> None:
     if spec.max_steps is not None and not 1 <= spec.max_steps <= 1000:
         raise ValueError("max_steps must be from 1 to 1000")
     if spec.publication is not None:
-        if (
-            not spec.publication.provider.strip()
-            or len(spec.publication.provider) > 50
-        ):
+        if not spec.publication.provider.strip() or len(spec.publication.provider) > 50:
             raise ValueError("publication provider is invalid")
         if (
             not spec.publication.base_ref.strip()
