@@ -33,9 +33,7 @@ def test_fixed_command_executes_argv_and_bounded_parameter(tmp_path: Path) -> No
     assert not rejected.ok and "must be one of" in rejected.output
 
 
-def test_fixed_command_does_not_inherit_credentials(
-    tmp_path: Path, monkeypatch: object
-) -> None:
+def test_fixed_command_does_not_inherit_credentials(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "super-secret-value")  # type: ignore[attr-defined]
     config = FixedCommandConfig(
         name="inspect_env",

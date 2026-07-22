@@ -48,9 +48,7 @@ class CredentialBroker:
         source = dict(environ or os.environ)
         return cls(
             secrets={
-                name: value
-                for name, value in source.items()
-                if value and is_sensitive_name(name)
+                name: value for name, value in source.items() if value and is_sensitive_name(name)
             }
         )
 

@@ -52,11 +52,7 @@ def tool_names_for_phase(
         names = set(override)
     else:
         spec = next(item for item in get_workflow(workflow).phases if item.name == phase)
-        names = (
-            set(registry.names())
-            if spec.allowed_tools is None
-            else set(spec.allowed_tools)
-        )
+        names = set(registry.names()) if spec.allowed_tools is None else set(spec.allowed_tools)
         for command in config.tools.fixed_commands.values():
             if phase in command.phases:
                 names.add(command.name)

@@ -171,7 +171,11 @@ class Agent:
 
     def _run_tool(self, name: str, arguments: dict[str, object]) -> tuple[str, bool, bool]:
         if not self.context.allows(name):
-            return (f"error: tool '{name}' is not allowed in phase {self.context.phase}", False, False)
+            return (
+                f"error: tool '{name}' is not allowed in phase {self.context.phase}",
+                False,
+                False,
+            )
         tool = self.registry.get(name)
         if tool is None:
             return (f"error: unknown tool '{name}'", False, False)
@@ -181,9 +185,7 @@ class Agent:
             return (self.context.redact(f"error: {exc}"), False, False)
         except Exception as exc:  # defensive: never let a tool crash the loop
             return (
-                self.context.redact(
-                    f"error: tool '{name}' raised {type(exc).__name__}: {exc}"
-                ),
+                self.context.redact(f"error: tool '{name}' raised {type(exc).__name__}: {exc}"),
                 False,
                 True,
             )

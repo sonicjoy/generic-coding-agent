@@ -11,8 +11,8 @@ from gca.credentials import CredentialBroker
 from gca.models import ModelProfile, ModelRegistry
 from gca.personas import PersonaSet
 from gca.providers.base import Message
-from gca.routing import WORKFLOW_FAST, RoutingPolicy
 from gca.repo_config import RepoConfig
+from gca.routing import WORKFLOW_FAST, RoutingPolicy
 from gca.session import (
     STATUS_ACTIVE,
     STATUS_COMPLETED,
