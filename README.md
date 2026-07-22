@@ -47,6 +47,156 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
+For day-to-day use against other repos, ``pip install -e .`` (without ``[dev]``)
+is enough.
+
+## Quick start in your project
+
+Use these steps to point `gca` at any repo you want the agent to improve.
+
+### 1. Install the harness
+
+```bash
+cd /path/to/generic-coding-agent
+python -m venv .venv
+. .venv/bin/activate
+pip install -e .
+gca --help
+```
+
+Keep this environment activated (or install into a tooling venv on your `PATH`).
+
+### 2. Enter your project
+
+```bash
+cd /path/to/your-project
+```
+
+`--workspace` defaults to the current directory.
+
+### 3. Add `models.yaml`
+
+```bash
+cp /path/to/generic-coding-agent/examples/models.yaml ./models.yaml
+```
+
+Edit model IDs and strength/speed/cost scores as needed. Catalog search order
+(later overrides earlier):
+
+1. `~/.gca/models.yaml`
+2. `<project>/models.yaml`
+3. `<project>/.gca/models.yaml`
+4. `--models <path>` (repeatable)
+
+Never put API keys in this file — only the env var *name* (for example
+`api_key_env: OPENROUTER_API_KEY`).
+
+### 4. Set the API key
+
+```bash
+printf 'OPENROUTER_API_KEY=sk-or-...\n' > .env
+chmod 600 .env
+```
+
+Also supported: `~/.gca/.env`, `<project>/.gca/.env`, or a normal shell
+`export`. Keep `.env` out of git.
+
+### 5. Add project instructions (`AGENTS.md`)
+
+Create `AGENTS.md` at the project root. Optional YAML frontmatter configures
+routing; the Markdown body is injected into every agent's system prompt.
+
+```yaml
+---
+gca:
+  workflow: auto
+  models:
+    fast: gpt-5.6-luna
+    planning: claude-opus-4.8
+    implementation: gpt-5.6-luna
+    review: claude-fable-5
+  max_review_cycles: 2
+---
+
+# Project agent guidance
+
+- Prefer small, targeted diffs via apply_patch.
+- Run the project's tests/linters before finishing.
+- Do not change unrelated files.
+```
+
+Model names under `gca.models` must match names registered in `models.yaml`.
+
+### 6. (Optional) Add skills
+
+```text
+your-project/
+  skills/
+    my-workflow/
+      SKILL.md
+```
+
+Skills are discovered from `skills/` and `.gca/skills/`, or from extra
+`--skills` directories.
+
+### 7. Run a task
+
+```bash
+. /path/to/generic-coding-agent/.venv/bin/activate
+cd /path/to/your-project
+
+gca run "Fix the flaky login test"
+gca run "Fix a typo in README" --workflow fast
+gca run "Add search history to the API" --workflow feature
+gca run "Refactor auth middleware" --max-steps 40
+```
+
+- Small tasks use one efficient agent (`fast`).
+- Feature/large changes use planner → implementer → reviewer (`feature`).
+- Sessions are stored under `.gca/sessions/` (gitignored).
+
+### 8. List and resume sessions
+
+```bash
+gca sessions
+gca resume <session_id>
+```
+
+### What to commit
+
+| Commit | Do not commit |
+|--------|----------------|
+| `models.yaml` | `.env`, `.gca/.env` |
+| `AGENTS.md` | `.gca/sessions/` |
+| `skills/**` | API keys |
+
+Suggested project layout:
+
+```text
+your-project/
+  AGENTS.md
+  models.yaml
+  .env                 # local only
+  skills/              # optional
+  .gca/sessions/       # runtime, ignored
+```
+
+### Unattended / server runs
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+. /opt/gca/.venv/bin/activate
+cd /srv/repos/my-app
+set -a; . ./.env; set +a
+gca run "Pick up the next failing CI issue and fix it" \
+  --workflow auto \
+  --max-steps 50
+```
+
+Destructive shell commands (`rm`, `git push --force`, etc.) are hard-blocked;
+intentional deletes go through `delete_file`. There is no human approval loop.
+
 ## Provider configuration
 
 Configure models declaratively with ``models.yaml`` (preferred). Plugins remain
