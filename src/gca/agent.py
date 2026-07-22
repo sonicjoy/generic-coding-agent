@@ -16,14 +16,22 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from gca.providers.base import LLMProvider, Message
-from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session, SessionStore
+from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session
 from gca.tools.base import ToolContext, ToolError, ToolRegistry
 from gca.tools.control import FINISH_TOOL_NAME
 
 # Callback invoked with human-readable progress events (e.g. for CLI logging).
 EventHook = Callable[[str], None]
+
+
+class SessionSaver(Protocol):
+    """Structural contract for persisting agent session progress."""
+
+    def save(self, session: Session) -> None:
+        """Persist ``session``."""
 
 
 @dataclass
@@ -47,7 +55,7 @@ class Agent:
         registry: ToolRegistry,
         session: Session,
         context: ToolContext,
-        store: SessionStore | None = None,
+        store: SessionSaver | None = None,
         config: AgentConfig | None = None,
         on_event: EventHook | None = None,
     ) -> None:
@@ -58,12 +66,15 @@ class Agent:
         self.store = store
         self.config = config or AgentConfig()
         self._on_event = on_event
+        if session.provider_state:
+            provider.set_state(dict(session.provider_state))
 
     def _emit(self, message: str) -> None:
         if self._on_event is not None:
             self._on_event(message)
 
     def _persist(self) -> None:
+        self.session.provider_state = self.provider.get_state()
         if self.store is not None:
             self.store.save(self.session)
 
@@ -99,10 +110,10 @@ class Agent:
                     finished = True
                     final_message = output
 
-            self._persist()
             if finished:
                 session.status = STATUS_COMPLETED
-                self._persist()
+            self._persist()
+            if finished:
                 break
         else:
             session.status = STATUS_PAUSED

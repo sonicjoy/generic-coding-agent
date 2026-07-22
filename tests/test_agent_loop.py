@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from gca.providers.scripted import ScriptedProvider
 from gca.runtime import RuntimeConfig, create_agent
 from gca.session import SessionStore
@@ -78,3 +80,79 @@ def test_end_to_end_multi_tool_task(tmp_path: Path) -> None:
     # Session persisted and resumable.
     reloaded = store.load(session.id)
     assert reloaded.status == "completed"
+
+
+def test_scripted_provider_resumes_from_saved_cursor(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    script = [
+        {"tool_calls": [{"name": "explore", "arguments": {"path": "."}}]},
+        {
+            "tool_calls": [
+                {"name": "finish", "arguments": {"summary": "Resumed correctly."}}
+            ]
+        },
+    ]
+    store = SessionStore(tmp_path / "sessions")
+    session = store.create("Inspect then finish")
+
+    first = create_agent(
+        RuntimeConfig(
+            workspace=workspace,
+            sessions_dir=tmp_path / "sessions",
+            max_steps=1,
+        ),
+        ScriptedProvider.from_script(script),
+        session,
+        store,
+    ).run()
+
+    assert first.status == "paused"
+    reloaded = store.load(session.id)
+    resumed = create_agent(
+        RuntimeConfig(
+            workspace=workspace,
+            sessions_dir=tmp_path / "sessions",
+            max_steps=2,
+        ),
+        ScriptedProvider.from_script(script),
+        reloaded,
+        store,
+    ).run()
+
+    assert resumed.status == "completed"
+    assert resumed.final_message == "Resumed correctly."
+
+
+def test_scripted_provider_rejects_different_resume_script(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    original = [{"tool_calls": [{"name": "explore", "arguments": {"path": "."}}]}]
+    store = SessionStore(tmp_path / "sessions")
+    session = store.create("Inspect")
+    create_agent(
+        RuntimeConfig(
+            workspace=workspace,
+            sessions_dir=tmp_path / "sessions",
+            max_steps=1,
+        ),
+        ScriptedProvider.from_script(original),
+        session,
+        store,
+    ).run()
+    reloaded = store.load(session.id)
+    replacement = [
+        {"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]}
+    ]
+
+    with pytest.raises(ValueError, match="does not match"):
+        create_agent(
+            RuntimeConfig(
+                workspace=workspace,
+                sessions_dir=tmp_path / "sessions",
+                max_steps=2,
+            ),
+            ScriptedProvider.from_script(replacement),
+            reloaded,
+            store,
+        )

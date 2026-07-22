@@ -8,6 +8,17 @@
     "tool_calls": [{ "name": "load_skill", "arguments": { "name": "greet" } }]
   },
   {
+    "content": "I have enough context to hand off an implementation plan.",
+    "tool_calls": [
+      {
+        "name": "finish",
+        "arguments": {
+          "plan": "Create greeting.py with a documented greet(name) function returning 'Hello, {name}!', then import and call it to verify the output."
+        }
+      }
+    ]
+  },
+  {
     "content": "Creating the greeting module per the skill.",
     "tool_calls": [
       {
@@ -47,6 +58,38 @@
       {
         "name": "finish",
         "arguments": { "summary": "Created and verified greeting.py with greet('World') -> 'Hello, World!'." }
+      }
+    ]
+  },
+  {
+    "content": "Reviewing the implemented file.",
+    "tool_calls": [
+      {
+        "name": "read_file",
+        "arguments": { "path": "greeting.py" }
+      }
+    ]
+  },
+  {
+    "content": "Independently verifying the greeting behavior.",
+    "tool_calls": [
+      {
+        "name": "run_command",
+        "arguments": {
+          "command": "python3 -c \"import sys; sys.path.insert(0, '.'); import greeting; assert greeting.greet('World') == 'Hello, World!'\""
+        }
+      }
+    ]
+  },
+  {
+    "content": "The implementation and verification both pass review.",
+    "tool_calls": [
+      {
+        "name": "finish",
+        "arguments": {
+          "verdict": "approved",
+          "summary": "Reviewed greeting.py and independently verified greet('World') returns 'Hello, World!'."
+        }
       }
     ]
   }

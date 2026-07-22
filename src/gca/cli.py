@@ -7,10 +7,10 @@ import json
 import sys
 from pathlib import Path
 
-from gca.plugins import load_plugins
-from gca.providers.base import LLMProvider
+from gca.models import ModelProfile
+from gca.plugins import LoadedPlugins, load_plugins
 from gca.providers.scripted import ScriptedProvider
-from gca.runtime import RuntimeConfig, create_agent
+from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import SessionStore
 
 
@@ -31,21 +31,34 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
         plugins_dir=plugins_dir,
         skill_dirs=skill_dirs,
         max_steps=args.max_steps,
+        workflow=args.workflow,
     )
 
 
-def _load_provider(args: argparse.Namespace, config: RuntimeConfig) -> LLMProvider:
-    if config.plugins_dir is not None:
-        loaded = load_plugins(config.plugins_dir)
-        if loaded.provider is not None:
-            return loaded.provider
-    if args.script:
+def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugins:
+    loaded = (
+        load_plugins(config.plugins_dir)
+        if config.plugins_dir is not None
+        else LoadedPlugins()
+    )
+    if len(loaded.models) == 0 and args.script:
         data = json.loads(Path(args.script).read_text(encoding="utf-8"))
-        return ScriptedProvider.from_script(data)
+        provider = ScriptedProvider.from_script(data)
+        loaded.models.register(
+            ModelProfile(
+                name="scripted",
+                provider=provider,
+                strength=3,
+                speed=5,
+                cost=1,
+            )
+        )
+    if len(loaded.models) > 0:
+        return loaded
     raise SystemExit(
-        "No LLM provider configured. Either supply a plugin directory (--plugins) "
-        "whose module defines get_provider(), or use --script PATH to drive the "
-        "built-in scripted provider (useful for demos and tests)."
+        "No models configured. Supply a plugin directory (--plugins) whose modules "
+        "define get_models() or get_provider(), or use --script PATH to drive the "
+        "built-in scripted provider."
     )
 
 
@@ -56,11 +69,16 @@ def _event_printer(message: str) -> None:
 def _cmd_run(args: argparse.Namespace) -> int:
     config = _build_config(args)
     store = SessionStore(config.sessions_dir)
-    provider = _load_provider(args, config)
+    loaded = _load_models(args, config)
     session = store.create(args.task)
     print(f"session: {session.id}", file=sys.stderr)
-    agent = create_agent(config, provider, session, store, on_event=_event_printer)
-    result = agent.run()
+    coordinator = create_coordinator(
+        config,
+        loaded.models,
+        loaded_plugins=loaded,
+        on_event=_event_printer,
+    )
+    result = coordinator.run(session, store)
     print(f"\nstatus: {result.status} (steps: {result.steps})")
     print(result.final_message)
     return 0 if result.status == "completed" else 1
@@ -69,11 +87,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
 def _cmd_resume(args: argparse.Namespace) -> int:
     config = _build_config(args)
     store = SessionStore(config.sessions_dir)
-    provider = _load_provider(args, config)
+    loaded = _load_models(args, config)
     session = store.load(args.session_id)
     print(f"resuming session: {session.id}", file=sys.stderr)
-    agent = create_agent(config, provider, session, store, on_event=_event_printer)
-    result = agent.run()
+    coordinator = create_coordinator(
+        config,
+        loaded.models,
+        loaded_plugins=loaded,
+        on_event=_event_printer,
+    )
+    result = coordinator.run(session, store)
     print(f"\nstatus: {result.status} (steps: {result.steps})")
     print(result.final_message)
     return 0 if result.status == "completed" else 1
@@ -102,6 +125,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         "--skills", action="append", default=None, help="Skill directory (repeatable)."
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Max agent steps.")
+    parser.add_argument(
+        "--workflow",
+        choices=["auto", "fast", "feature"],
+        default=None,
+        help="Override workflow selection (default: AGENTS.md or auto).",
+    )
     parser.add_argument("--script", default=None, help="JSON script for the scripted provider.")
 
 

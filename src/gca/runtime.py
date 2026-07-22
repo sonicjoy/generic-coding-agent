@@ -6,9 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gca.agent import Agent, AgentConfig, EventHook
-from gca.context import build_context_prompt
-from gca.plugins import load_plugins
+from gca.context import build_context_prompt, load_gca_config
+from gca.models import ModelRegistry
+from gca.orchestrator import RunCoordinator
+from gca.plugins import LoadedPlugins, load_plugins
 from gca.providers.base import LLMProvider, Message
+from gca.routing import RoutingPolicy
 from gca.session import Session, SessionStore
 from gca.skills import LoadSkillTool, SkillRegistry
 from gca.tools import build_registry
@@ -38,6 +41,7 @@ class RuntimeConfig:
     plugins_dir: Path | None = None
     skill_dirs: list[Path] | None = None
     max_steps: int = 25
+    workflow: str | None = None
 
 
 def default_skill_dirs(workspace: Path) -> list[Path]:
@@ -55,10 +59,18 @@ def build_system_prompt(workspace: Path, skills: SkillRegistry) -> str:
     return "\n\n".join(parts)
 
 
-def build_registry_with_extras(config: RuntimeConfig, skills: SkillRegistry) -> ToolRegistry:
+def build_registry_with_extras(
+    config: RuntimeConfig,
+    skills: SkillRegistry,
+    loaded_plugins: LoadedPlugins | None = None,
+) -> ToolRegistry:
+    """Build the tool registry without reloading already-loaded plugins."""
+
     registry = build_registry()
     registry.register(LoadSkillTool(skills))
-    if config.plugins_dir is not None:
+    if loaded_plugins is not None:
+        loaded_plugins.register_tools(registry)
+    elif config.plugins_dir is not None:
         load_plugins(config.plugins_dir, registry)
     return registry
 
@@ -99,5 +111,32 @@ def create_agent(
         context=context,
         store=store,
         config=AgentConfig(max_steps=config.max_steps),
+        on_event=on_event,
+    )
+
+
+def create_coordinator(
+    config: RuntimeConfig,
+    models: ModelRegistry,
+    *,
+    loaded_plugins: LoadedPlugins | None = None,
+    on_event: EventHook | None = None,
+) -> RunCoordinator:
+    """Build the workflow coordinator used by the CLI."""
+
+    if len(models) == 0:
+        raise ValueError("at least one model must be registered")
+    skill_dirs = config.skill_dirs or default_skill_dirs(config.workspace)
+    skills = SkillRegistry.discover(skill_dirs)
+    registry = build_registry_with_extras(config, skills, loaded_plugins)
+    policy = RoutingPolicy.from_mapping(load_gca_config(config.workspace))
+    return RunCoordinator(
+        workspace=config.workspace,
+        max_steps=config.max_steps,
+        requested_workflow=config.workflow,
+        models=models,
+        policy=policy,
+        tools=registry,
+        system_prompt=build_system_prompt(config.workspace, skills),
         on_event=on_event,
     )

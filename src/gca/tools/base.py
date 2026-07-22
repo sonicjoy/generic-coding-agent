@@ -91,6 +91,16 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [self._tools[name].spec() for name in self.names()]
 
+    def subset(self, names: set[str]) -> ToolRegistry:
+        """Return a registry containing only the requested existing tools."""
+
+        registry = ToolRegistry()
+        for name in sorted(names):
+            tool = self.get(name)
+            if tool is not None:
+                registry.register(tool)
+        return registry
+
     def __len__(self) -> int:
         return len(self._tools)
 

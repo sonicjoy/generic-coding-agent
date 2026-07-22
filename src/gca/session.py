@@ -29,6 +29,108 @@ def _now() -> str:
 
 
 @dataclass
+class AgentRunRecord:
+    """Persisted conversation and outcome for one workflow agent."""
+
+    phase: str
+    model: str
+    messages: list[Message] = field(default_factory=list)
+    status: str = STATUS_ACTIVE
+    step_count: int = 0
+    final_message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize this phase run."""
+
+        return {
+            "phase": self.phase,
+            "model": self.model,
+            "messages": [message.to_dict() for message in self.messages],
+            "status": self.status,
+            "step_count": self.step_count,
+            "final_message": self.final_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AgentRunRecord:
+        """Load a phase run from persisted data."""
+
+        return cls(
+            phase=str(data.get("phase", "")),
+            model=str(data.get("model", "")),
+            messages=[Message.from_dict(message) for message in data.get("messages", [])],
+            status=str(data.get("status", STATUS_ACTIVE)),
+            step_count=int(data.get("step_count", 0)),
+            final_message=str(data.get("final_message", "")),
+        )
+
+
+@dataclass
+class WorkflowState:
+    """Durable orchestration state for a multi-agent workflow."""
+
+    name: str = ""
+    phase: str = ""
+    complexity: str = ""
+    complexity_score: int = 0
+    complexity_signals: list[str] = field(default_factory=list)
+    review_cycles: int = 0
+    max_review_cycles: int = 2
+    model_bindings: dict[str, str] = field(default_factory=dict)
+    artifacts: dict[str, str] = field(default_factory=dict)
+    provider_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    registry_fingerprint: str = ""
+    policy_fingerprint: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize workflow state."""
+
+        return {
+            "name": self.name,
+            "phase": self.phase,
+            "complexity": self.complexity,
+            "complexity_score": self.complexity_score,
+            "complexity_signals": self.complexity_signals,
+            "review_cycles": self.review_cycles,
+            "max_review_cycles": self.max_review_cycles,
+            "model_bindings": self.model_bindings,
+            "artifacts": self.artifacts,
+            "provider_states": self.provider_states,
+            "registry_fingerprint": self.registry_fingerprint,
+            "policy_fingerprint": self.policy_fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowState:
+        """Load workflow state from persisted data."""
+
+        provider_states = {
+            str(name): dict(state) for name, state in data.get("provider_states", {}).items()
+        }
+        return cls(
+            name=str(data.get("name", "")),
+            phase=str(data.get("phase", "")),
+            complexity=str(data.get("complexity", "")),
+            complexity_score=int(data.get("complexity_score", 0)),
+            complexity_signals=[
+                str(signal) for signal in data.get("complexity_signals", [])
+            ],
+            review_cycles=int(data.get("review_cycles", 0)),
+            max_review_cycles=int(data.get("max_review_cycles", 2)),
+            model_bindings={
+                str(role): str(model)
+                for role, model in data.get("model_bindings", {}).items()
+            },
+            artifacts={
+                str(name): str(value) for name, value in data.get("artifacts", {}).items()
+            },
+            provider_states=provider_states,
+            registry_fingerprint=str(data.get("registry_fingerprint", "")),
+            policy_fingerprint=str(data.get("policy_fingerprint", "")),
+        )
+
+
+@dataclass
 class Session:
     """Durable state for a single agent run."""
 
@@ -40,6 +142,11 @@ class Session:
     step_count: int = 0
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+    schema_version: int = 1
+    workflow: WorkflowState | None = None
+    agent_runs: list[AgentRunRecord] = field(default_factory=list)
+    provider_state: dict[str, Any] = field(default_factory=dict)
+    active_model: str = ""
 
     def touch(self) -> None:
         self.updated_at = _now()
@@ -54,10 +161,16 @@ class Session:
             "step_count": self.step_count,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "schema_version": self.schema_version,
+            "workflow": self.workflow.to_dict() if self.workflow is not None else None,
+            "agent_runs": [run.to_dict() for run in self.agent_runs],
+            "provider_state": self.provider_state,
+            "active_model": self.active_model,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Session:
+        workflow_data = data.get("workflow")
         return cls(
             id=str(data["id"]),
             task=str(data.get("task", "")),
@@ -67,6 +180,17 @@ class Session:
             step_count=int(data.get("step_count", 0)),
             created_at=str(data.get("created_at", _now())),
             updated_at=str(data.get("updated_at", _now())),
+            schema_version=int(data.get("schema_version", 0)),
+            workflow=(
+                WorkflowState.from_dict(workflow_data)
+                if isinstance(workflow_data, dict)
+                else None
+            ),
+            agent_runs=[
+                AgentRunRecord.from_dict(run) for run in data.get("agent_runs", [])
+            ],
+            provider_state=dict(data.get("provider_state", {})),
+            active_model=str(data.get("active_model", "")),
         )
 
 
