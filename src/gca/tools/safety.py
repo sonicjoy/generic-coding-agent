@@ -31,6 +31,11 @@ def check_command(command: str) -> BlockedCommand | None:
         return BlockedCommand(reason="empty command", rule="empty")
     if re.search(r":\(\)\s*\{\s*:\|:&\s*\}\s*;?\s*:", text):
         return BlockedCommand(reason="fork bombs are blocked", rule="fork-bomb")
+    if "$(" in text or "`" in text:
+        return BlockedCommand(
+            reason="command substitution is blocked; run the inner command directly",
+            rule="command-substitution",
+        )
 
     try:
         tokens = shlex.split(text, posix=True)
@@ -64,18 +69,59 @@ def _command_argv_groups(tokens: list[str]) -> list[list[str]]:
     return groups
 
 
+# Wrappers whose argument is itself a command to inspect.
+_TRANSPARENT_WRAPPERS = frozenset({"env", "nohup", "nice", "ionice", "setsid", "stdbuf", "xargs"})
+_SHELL_NAMES = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+
+
 def _check_argv(tokens: list[str]) -> BlockedCommand | None:
     tokens = [token for token in tokens if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token)]
     if not tokens:
         return None
 
-    if PurePosixPath(tokens[0]).name == "sudo":
+    name = PurePosixPath(tokens[0]).name
+
+    if name == "sudo":
         return BlockedCommand(
             reason="sudo is blocked inside the agent sandbox",
             rule="sudo",
         )
 
-    name = PurePosixPath(tokens[0]).name
+    if name in _SHELL_NAMES:
+        # Recurse into `bash -c '<payload>'` so wrappers cannot launder commands.
+        for index, arg in enumerate(tokens[1:], start=1):
+            if arg == "-c" and index + 1 < len(tokens):
+                return check_command(tokens[index + 1])
+        return None
+
+    if name in _TRANSPARENT_WRAPPERS:
+        rest = [arg for arg in tokens[1:] if not arg.startswith("-")]
+        if rest:
+            return _check_argv(rest)
+        return None
+
+    if name == "timeout":
+        rest = tokens[1:]
+        while rest and rest[0].startswith("-"):
+            rest = rest[1:]
+        if rest:
+            # Skip the duration argument.
+            return _check_argv(rest[1:]) if len(rest) > 1 else None
+        return None
+
+    if name == "find" and any(arg == "-delete" for arg in tokens[1:]):
+        return BlockedCommand(
+            reason="find -delete is blocked; use the delete_file tool for intentional deletes",
+            rule="find-delete",
+        )
+    if name == "find" and any(arg in {"-exec", "-execdir", "-ok", "-okdir"} for arg in tokens[1:]):
+        for index, arg in enumerate(tokens[1:], start=1):
+            if arg in {"-exec", "-execdir", "-ok", "-okdir"} and index + 1 < len(tokens):
+                blocked = _check_argv(tokens[index + 1 :])
+                if blocked is not None:
+                    return blocked
+        return None
+
     if name in {"rm", "rmdir"}:
         return BlockedCommand(
             reason="rm/rmdir is blocked; use the delete_file tool for intentional deletes",

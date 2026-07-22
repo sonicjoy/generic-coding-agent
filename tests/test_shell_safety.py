@@ -28,6 +28,16 @@ from gca.tools.shell import RunCommandTool
         ("dd if=/dev/zero of=/dev/sda", "dd"),
         ("mkfs.ext4 /dev/sdb1", "mkfs"),
         (":(){ :|:& };:", "fork-bomb"),
+        ("bash -c 'rm -rf .'", "rm"),
+        ('sh -c "sudo id"', "sudo"),
+        ("find . -name '*.tmp' -delete", "find-delete"),
+        ("find . -exec rm {} +", "rm"),
+        ("xargs rm", "rm"),
+        ("env FOO=1 rm file.txt", "rm"),
+        ("nohup rm file.txt", "rm"),
+        ("timeout 5 rm file.txt", "rm"),
+        ("echo $(rm -rf .)", "command-substitution"),
+        ("`rm x`", "command-substitution"),
     ],
 )
 def test_blocks_dangerous_commands(command: str, rule: str) -> None:
@@ -55,6 +65,11 @@ def test_blocks_dangerous_commands(command: str, rule: str) -> None:
         "echo rm",
         "ls remote",
         "git restore path.txt",
+        "bash -c 'pytest -q'",
+        "timeout 60 pytest -q",
+        "xargs grep TODO",
+        "find . -name '*.py'",
+        "find . -exec grep -l TODO {} +",
     ],
 )
 def test_allows_safe_commands(command: str) -> None:
