@@ -1,5 +1,5 @@
-# Ready-to-copy model catalog for project workspaces (e.g. mmmapper).
-# Copy next to AGENTS.md at the repo root:
+# Ready-to-copy model catalog for a project workspace.
+# Example (mmmapper):
 #   cp /path/to/generic-coding-agent/examples/templates/models.yaml /path/to/mmmapper/
 #
 # API keys stay in environment variables / .env files — never in this file.

@@ -9,10 +9,9 @@ gca:
   max_review_cycles: 2
 ---
 
-# mmmapper agent guidance
+# Project agent guidance
 
-You are working in the **mmmapper** repository. Keep changes focused on the
-task; prefer small, reviewable diffs.
+Keep changes focused on the task; prefer small, reviewable diffs.
 
 ## Working style
 
@@ -31,6 +30,6 @@ task; prefer small, reviewable diffs.
 
 ## Customize for this repo
 
-Edit this file with mmmapper-specific conventions (build/test commands, package
+Edit this file with project-specific conventions (build/test commands, package
 layout, coding standards, areas that must not be touched). Model names under
 `gca.models` must match entries in `models.yaml`.

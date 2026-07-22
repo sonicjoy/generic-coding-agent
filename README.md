@@ -50,12 +50,13 @@ pip install -e ".[dev]"
 For day-to-day use against other repos, ``pip install -e .`` (without ``[dev]``)
 is enough.
 
-## Quick start (mmmapper)
+## Quick start in your project
 
-Use these steps to point `gca` at the **mmmapper** repo. The same flow works
-for any other project — swap the workspace path.
+Use these steps to point `gca` at a repo you want the agent to improve. The
+examples below use **mmmapper** as the sample workspace — replace that path
+with yours.
 
-Ready-to-copy templates live under ``examples/templates/``:
+Ready-to-copy templates:
 
 - ``examples/templates/AGENTS.md``
 - ``examples/templates/models.yaml``
@@ -72,7 +73,7 @@ gca --help
 
 Keep this environment activated (or install into a tooling venv on your `PATH`).
 
-### 2. Enter mmmapper
+### 2. Enter your project
 
 ```bash
 cd /path/to/mmmapper
@@ -88,7 +89,7 @@ cp "$GCA/examples/templates/models.yaml" ./models.yaml
 cp "$GCA/examples/templates/AGENTS.md" ./AGENTS.md
 ```
 
-Edit model IDs / scores in `models.yaml` and mmmapper-specific conventions in
+Edit model IDs / scores in `models.yaml` and project-specific conventions in
 `AGENTS.md` as needed. Catalog search order (later overrides earlier):
 
 1. `~/.gca/models.yaml`
@@ -153,7 +154,7 @@ gca resume <session_id>
 | `AGENTS.md` | `.gca/sessions/` |
 | `skills/**` | API keys |
 
-Suggested mmmapper layout after setup:
+Suggested layout after setup (mmmapper shown as the example project):
 
 ```text
 mmmapper/
@@ -296,8 +297,8 @@ of every agent's system context.
 
 ## Usage
 
-See [Quick start (mmmapper)](#quick-start-mmmapper) for the full setup flow.
-Short examples:
+See [Quick start in your project](#quick-start-in-your-project) for the full
+setup flow (examples use mmmapper). Short examples:
 
 ```bash
 # After models.yaml + .env are in place
