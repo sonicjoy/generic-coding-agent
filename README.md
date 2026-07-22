@@ -296,8 +296,8 @@ of every agent's system context.
 
 ## Usage
 
-See [Quick start in your project](#quick-start-in-your-project) for the full
-setup flow. Short examples:
+See [Quick start (mmmapper)](#quick-start-mmmapper) for the full setup flow.
+Short examples:
 
 ```bash
 # After models.yaml + .env are in place
