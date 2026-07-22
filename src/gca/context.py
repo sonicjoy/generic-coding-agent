@@ -88,9 +88,7 @@ def load_gca_config(workspace: Path) -> dict[str, Any]:
         if raw_config is None:
             continue
         if not isinstance(raw_config, dict):
-            raise ContextConfigError(
-                f"'gca' frontmatter in {context_file.path} must be a mapping"
-            )
+            raise ContextConfigError(f"'gca' frontmatter in {context_file.path} must be a mapping")
         merged = _deep_merge(merged, raw_config)
     return merged
 

@@ -99,6 +99,7 @@ class ModelRegistry:
         strategy: str,
         min_strength: int = 1,
         preferred: str | None = None,
+        additional_capabilities: frozenset[str] = frozenset(),
     ) -> ModelProfile:
         """Select a model for a role.
 
@@ -111,6 +112,8 @@ class ModelRegistry:
         if not 1 <= min_strength <= 5:
             raise ValueError("min_strength must be from 1 to 5")
 
+        required_capabilities = {capability, *additional_capabilities}
+
         if preferred:
             profile = self.get(preferred)
             if profile is None:
@@ -118,21 +121,31 @@ class ModelRegistry:
                 raise ModelSelectionError(
                     f"unknown preferred model '{preferred}' (available: {available})"
                 )
-            if not profile.supports(capability):
+            missing = sorted(
+                required for required in required_capabilities if not profile.supports(required)
+            )
+            if missing:
                 raise ModelSelectionError(
-                    f"model '{preferred}' does not support capability '{capability}'"
+                    f"model '{preferred}' does not support: {', '.join(missing)}"
+                )
+            if profile.strength < min_strength:
+                raise ModelSelectionError(
+                    f"model '{preferred}' has strength {profile.strength}, below "
+                    f"the required minimum {min_strength}"
                 )
             return profile
 
         candidates = [
             profile
             for profile in self._models.values()
-            if profile.strength >= min_strength and profile.supports(capability)
+            if profile.strength >= min_strength
+            and all(profile.supports(required) for required in required_capabilities)
         ]
         if not candidates:
             available = ", ".join(self.names()) or "none"
             raise ModelSelectionError(
-                f"no model supports '{capability}' with strength >= {min_strength} "
+                f"no model supports {', '.join(sorted(required_capabilities))} "
+                f"with strength >= {min_strength} "
                 f"(available: {available})"
             )
 

@@ -13,12 +13,8 @@ class StubProvider(LLMProvider):
 
 def test_selects_strongest_and_efficient_models() -> None:
     registry = ModelRegistry()
-    registry.register(
-        ModelProfile("fast", StubProvider(), strength=2, speed=5, cost=1)
-    )
-    registry.register(
-        ModelProfile("strong", StubProvider(), strength=5, speed=2, cost=5)
-    )
+    registry.register(ModelProfile("fast", StubProvider(), strength=2, speed=5, cost=1))
+    registry.register(ModelProfile("strong", StubProvider(), strength=5, speed=2, cost=5))
 
     assert registry.select(capability="planning", strategy="strongest").name == "strong"
     assert registry.select(capability="coding", strategy="efficient").name == "fast"
@@ -55,6 +51,20 @@ def test_explicit_preference_wins_and_validates_capability() -> None:
             capability="coding",
             strategy="efficient",
             preferred="review-only",
+        )
+    with pytest.raises(ModelSelectionError, match="below the required minimum"):
+        registry.select(
+            capability="review",
+            strategy="strongest",
+            preferred="review-only",
+            min_strength=4,
+        )
+    with pytest.raises(ModelSelectionError, match="tool_use"):
+        registry.select(
+            capability="review",
+            strategy="strongest",
+            preferred="review-only",
+            additional_capabilities=frozenset({"tool_use"}),
         )
 
 

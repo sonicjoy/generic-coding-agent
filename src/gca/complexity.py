@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from gca.routing import RoutingPolicy, WORKFLOW_FAST, WORKFLOW_FEATURE
+from gca.routing import WORKFLOW_FAST, WORKFLOW_FEATURE, RoutingPolicy
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,16 @@ def classify_task(task: str, policy: RoutingPolicy) -> ComplexityAssessment:
     if path_count >= 2:
         score += 1
         signals.append("multiple paths mentioned (+1)")
+
+    if large_matches and score < policy.large_threshold:
+        score = policy.large_threshold
+        signals.append("large-change keyword floor")
+    strong_feature_matches = {
+        keyword for keyword in feature_matches if keyword not in {"add", "build", "create"}
+    }
+    if strong_feature_matches and not large_matches and score < policy.feature_threshold:
+        score = policy.feature_threshold
+        signals.append("explicit feature keyword floor")
 
     score = max(0, min(10, score))
     if score >= policy.large_threshold:

@@ -38,6 +38,7 @@ class AgentRunRecord:
     status: str = STATUS_ACTIVE
     step_count: int = 0
     final_message: str = ""
+    inflight_tool_call_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize this phase run."""
@@ -49,6 +50,7 @@ class AgentRunRecord:
             "status": self.status,
             "step_count": self.step_count,
             "final_message": self.final_message,
+            "inflight_tool_call_id": self.inflight_tool_call_id,
         }
 
     @classmethod
@@ -62,6 +64,7 @@ class AgentRunRecord:
             status=str(data.get("status", STATUS_ACTIVE)),
             step_count=int(data.get("step_count", 0)),
             final_message=str(data.get("final_message", "")),
+            inflight_tool_call_id=str(data.get("inflight_tool_call_id", "")),
         )
 
 
@@ -112,18 +115,13 @@ class WorkflowState:
             phase=str(data.get("phase", "")),
             complexity=str(data.get("complexity", "")),
             complexity_score=int(data.get("complexity_score", 0)),
-            complexity_signals=[
-                str(signal) for signal in data.get("complexity_signals", [])
-            ],
+            complexity_signals=[str(signal) for signal in data.get("complexity_signals", [])],
             review_cycles=int(data.get("review_cycles", 0)),
             max_review_cycles=int(data.get("max_review_cycles", 2)),
             model_bindings={
-                str(role): str(model)
-                for role, model in data.get("model_bindings", {}).items()
+                str(role): str(model) for role, model in data.get("model_bindings", {}).items()
             },
-            artifacts={
-                str(name): str(value) for name, value in data.get("artifacts", {}).items()
-            },
+            artifacts={str(name): str(value) for name, value in data.get("artifacts", {}).items()},
             provider_states=provider_states,
             registry_fingerprint=str(data.get("registry_fingerprint", "")),
             policy_fingerprint=str(data.get("policy_fingerprint", "")),
@@ -147,6 +145,8 @@ class Session:
     agent_runs: list[AgentRunRecord] = field(default_factory=list)
     provider_state: dict[str, Any] = field(default_factory=dict)
     active_model: str = ""
+    final_message: str = ""
+    inflight_tool_call_id: str = ""
 
     def touch(self) -> None:
         self.updated_at = _now()
@@ -166,6 +166,8 @@ class Session:
             "agent_runs": [run.to_dict() for run in self.agent_runs],
             "provider_state": self.provider_state,
             "active_model": self.active_model,
+            "final_message": self.final_message,
+            "inflight_tool_call_id": self.inflight_tool_call_id,
         }
 
     @classmethod
@@ -182,15 +184,13 @@ class Session:
             updated_at=str(data.get("updated_at", _now())),
             schema_version=int(data.get("schema_version", 0)),
             workflow=(
-                WorkflowState.from_dict(workflow_data)
-                if isinstance(workflow_data, dict)
-                else None
+                WorkflowState.from_dict(workflow_data) if isinstance(workflow_data, dict) else None
             ),
-            agent_runs=[
-                AgentRunRecord.from_dict(run) for run in data.get("agent_runs", [])
-            ],
+            agent_runs=[AgentRunRecord.from_dict(run) for run in data.get("agent_runs", [])],
             provider_state=dict(data.get("provider_state", {})),
             active_model=str(data.get("active_model", "")),
+            final_message=str(data.get("final_message", "")),
+            inflight_tool_call_id=str(data.get("inflight_tool_call_id", "")),
         )
 
 

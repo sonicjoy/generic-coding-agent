@@ -9,7 +9,7 @@ from gca.agent import Agent, AgentConfig, AgentResult
 from gca.complexity import classify_task
 from gca.models import ModelProfile, ModelRegistry
 from gca.providers.base import Message
-from gca.routing import RoutingPolicy, WORKFLOW_FAST
+from gca.routing import WORKFLOW_FAST, RoutingPolicy
 from gca.session import (
     STATUS_ACTIVE,
     STATUS_COMPLETED,
@@ -48,6 +48,8 @@ class _PhaseStore:
         self.record.messages = child.messages
         self.record.status = child.status
         self.record.step_count = child.step_count
+        self.record.final_message = child.final_message
+        self.record.inflight_tool_call_id = child.inflight_tool_call_id
         workflow = self.parent.workflow
         if workflow is not None:
             workflow.provider_states[self.model_name] = dict(child.provider_state)
@@ -83,7 +85,7 @@ class RunCoordinator:
         """Run or resume the selected workflow."""
 
         if session.status in {STATUS_COMPLETED, STATUS_FAILED}:
-            message = f"Session already {session.status}."
+            message = session.final_message or f"Session already {session.status}."
             if session.workflow is not None:
                 key = "review" if session.status == STATUS_COMPLETED else "error"
                 message = session.workflow.artifacts.get(
@@ -152,6 +154,7 @@ class RunCoordinator:
                 strategy=phase.strategy,
                 min_strength=self.policy.min_strength(phase.model_role, complexity),
                 preferred=self.policy.preferred_model(phase.model_role),
+                additional_capabilities=frozenset({"tool_use"}),
             )
             bindings[phase.model_role] = profile.name
         return bindings
@@ -221,10 +224,12 @@ class RunCoordinator:
             model_name = workflow.model_bindings[spec.model_role]
             profile = self._model(model_name)
             self._emit(f"[routing] phase={phase} model={model_name}")
+            session.status = STATUS_ACTIVE
             result, record = self._run_phase(session, store, profile, phase)
 
             if result.status == STATUS_PAUSED:
                 session.status = STATUS_PAUSED
+                session.final_message = result.final_message
                 store.save(session)
                 return self._parent_result(session, result.final_message)
             if result.status == STATUS_FAILED:
@@ -242,6 +247,12 @@ class RunCoordinator:
                 summary = str(
                     _finish_arguments(record).get("summary", result.final_message)
                 ).strip()
+                if not summary:
+                    return self._fail(
+                        session,
+                        store,
+                        "implementation agent returned no summary",
+                    )
                 workflow.artifacts["implementation"] = summary
                 self._audit(session, "implementation", summary)
                 workflow.phase = "review"
@@ -255,10 +266,17 @@ class RunCoordinator:
                         store,
                         "review agent did not return a structured verdict",
                     )
+                if not summary:
+                    return self._fail(
+                        session,
+                        store,
+                        "review agent returned an empty review summary",
+                    )
                 workflow.artifacts["review"] = summary
                 self._audit(session, "review", f"{verdict}: {summary}")
                 if verdict == "approved":
                     session.status = STATUS_COMPLETED
+                    session.final_message = summary
                     store.save(session)
                     return self._parent_result(session, summary)
                 if workflow.review_cycles >= workflow.max_review_cycles:
@@ -277,6 +295,7 @@ class RunCoordinator:
 
         session.status = STATUS_PAUSED
         message = f"Step budget ({self.max_steps}) exhausted."
+        session.final_message = message
         store.save(session)
         return self._parent_result(session, message)
 
@@ -322,6 +341,8 @@ class RunCoordinator:
             step_count=record.step_count,
             provider_state=dict(workflow.provider_states.get(profile.name, {})),
             active_model=profile.name,
+            final_message=record.final_message,
+            inflight_tool_call_id=record.inflight_tool_call_id,
         )
         remaining = self.max_steps - parent.step_count
         phase_limit = child.step_count + remaining
@@ -341,9 +362,7 @@ class RunCoordinator:
 
     def _phase_tools(self, phase: str) -> ToolRegistry:
         spec = next(
-            phase_spec
-            for phase_spec in get_workflow("feature").phases
-            if phase_spec.name == phase
+            phase_spec for phase_spec in get_workflow("feature").phases if phase_spec.name == phase
         )
         names = set(self.tools.names()) if spec.allowed_tools is None else set(spec.allowed_tools)
         names.add(FINISH_TOOL_NAME)
@@ -396,9 +415,7 @@ class RunCoordinator:
         return "\n\n".join(parts)
 
     @staticmethod
-    def _resumable_record(
-        session: Session, phase: str, model_name: str
-    ) -> AgentRunRecord | None:
+    def _resumable_record(session: Session, phase: str, model_name: str) -> AgentRunRecord | None:
         if not session.agent_runs:
             return None
         record = session.agent_runs[-1]
@@ -436,6 +453,7 @@ class RunCoordinator:
 
     def _fail(self, session: Session, store: SessionStore, message: str) -> AgentResult:
         session.status = STATUS_FAILED
+        session.final_message = message
         if session.workflow is not None:
             session.workflow.artifacts["error"] = message
         store.save(session)

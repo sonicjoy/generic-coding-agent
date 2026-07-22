@@ -29,6 +29,8 @@ def test_new_feature_and_large_change_use_feature_workflow() -> None:
 
     format_feature = classify_task("Add support for a new JSON format", policy)
     assert format_feature.recommended_workflow == "feature"
+    assert classify_task("Support a JSON format", policy).recommended_workflow == "feature"
+    assert classify_task("Migrate documentation", policy).level == "large"
 
 
 def test_policy_parses_overrides() -> None:

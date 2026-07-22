@@ -107,3 +107,5 @@ class LLMProvider(ABC):
         Network-backed providers are normally stateless and can use this default
         implementation. Deterministic or local providers may override it.
         """
+
+        return None

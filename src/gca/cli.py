@@ -36,11 +36,7 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
 
 
 def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugins:
-    loaded = (
-        load_plugins(config.plugins_dir)
-        if config.plugins_dir is not None
-        else LoadedPlugins()
-    )
+    loaded = load_plugins(config.plugins_dir) if config.plugins_dir is not None else LoadedPlugins()
     if len(loaded.models) == 0 and args.script:
         data = json.loads(Path(args.script).read_text(encoding="utf-8"))
         provider = ScriptedProvider.from_script(data)

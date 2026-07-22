@@ -18,8 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from gca.providers.base import LLMProvider, Message
-from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session
+from gca.providers.base import LLMProvider, Message, ToolCall
+from gca.session import STATUS_ACTIVE, STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session
 from gca.tools.base import ToolContext, ToolError, ToolRegistry
 from gca.tools.control import FINISH_TOOL_NAME
 
@@ -80,9 +80,30 @@ class Agent:
 
     def run(self) -> AgentResult:
         session = self.session
-        final_message = ""
+        if session.status in {STATUS_COMPLETED, STATUS_FAILED}:
+            return self._result()
+        if session.inflight_tool_call_id:
+            session.status = STATUS_FAILED
+            session.final_message = (
+                f"Tool call '{session.inflight_tool_call_id}' was interrupted; "
+                "its side effects are unknown."
+            )
+            self._persist()
+            return self._result()
+        session.status = STATUS_ACTIVE
 
-        while session.step_count < self.config.max_steps:
+        while True:
+            pending_calls = self._pending_tool_calls()
+            if pending_calls:
+                if self._run_tool_calls(pending_calls):
+                    return self._result()
+                continue
+            if session.step_count >= self.config.max_steps:
+                session.status = STATUS_PAUSED
+                session.final_message = f"Step budget ({self.config.max_steps}) exhausted."
+                self._persist()
+                return self._result()
+
             response = self.provider.complete(session.messages, self.registry.specs())
             session.step_count += 1
             session.messages.append(
@@ -96,45 +117,69 @@ class Agent:
                 self._emit(f"[assistant] {response.content}")
 
             if not response.tool_calls:
-                final_message = response.content
                 session.status = STATUS_COMPLETED
+                session.final_message = response.content
                 self._persist()
-                break
+                return self._result()
 
-            finished = False
-            for call in response.tool_calls:
-                output, ok = self._run_tool(call.name, call.arguments)
-                self._emit(f"[tool] {call.name} -> {'ok' if ok else 'error'}")
-                session.messages.append(Message(role="tool", content=output, tool_call_id=call.id))
-                if call.name == FINISH_TOOL_NAME:
-                    finished = True
-                    final_message = output
-
-            if finished:
-                session.status = STATUS_COMPLETED
-            self._persist()
-            if finished:
-                break
-        else:
-            session.status = STATUS_PAUSED
-            final_message = f"Step budget ({self.config.max_steps}) exhausted."
+            # Persist the provider cursor and assistant response before executing
+            # side effects. Unanswered calls can then be resumed deterministically.
             self._persist()
 
+    def _result(self) -> AgentResult:
         return AgentResult(
-            status=session.status,
-            steps=session.step_count,
-            final_message=final_message,
+            status=self.session.status,
+            steps=self.session.step_count,
+            final_message=self.session.final_message,
         )
 
-    def _run_tool(self, name: str, arguments: dict[str, object]) -> tuple[str, bool]:
+    def _pending_tool_calls(self) -> list[ToolCall]:
+        answered = {
+            message.tool_call_id
+            for message in self.session.messages
+            if message.role == "tool" and message.tool_call_id is not None
+        }
+        return [
+            call
+            for message in self.session.messages
+            if message.role == "assistant"
+            for call in message.tool_calls
+            if call.id not in answered
+        ]
+
+    def _run_tool_calls(self, calls: list[ToolCall]) -> bool:
+        for call in calls:
+            self.session.inflight_tool_call_id = call.id
+            self._persist()
+            output, ok, fatal = self._run_tool(call.name, call.arguments)
+            self._emit(f"[tool] {call.name} -> {'ok' if ok else 'error'}")
+            self.session.messages.append(Message(role="tool", content=output, tool_call_id=call.id))
+            self.session.inflight_tool_call_id = ""
+            if fatal:
+                self.session.status = STATUS_FAILED
+                self.session.final_message = output
+                self._persist()
+                return True
+            if call.name == FINISH_TOOL_NAME and ok:
+                self.session.status = STATUS_COMPLETED
+                self.session.final_message = output
+                self._persist()
+                return True
+            self._persist()
+        return False
+
+    def _run_tool(self, name: str, arguments: dict[str, object]) -> tuple[str, bool, bool]:
         tool = self.registry.get(name)
         if tool is None:
-            return (f"error: unknown tool '{name}'", False)
+            return (f"error: unknown tool '{name}'", False, False)
         try:
             result = tool.run(self.context, **arguments)
         except ToolError as exc:
-            return (f"error: {exc}", False)
+            return (f"error: {exc}", False, False)
         except Exception as exc:  # defensive: never let a tool crash the loop
-            self.session.status = STATUS_FAILED
-            return (f"error: tool '{name}' raised {type(exc).__name__}: {exc}", False)
-        return (result.output, result.ok)
+            return (
+                f"error: tool '{name}' raised {type(exc).__name__}: {exc}",
+                False,
+                True,
+            )
+        return (result.output, result.ok, False)

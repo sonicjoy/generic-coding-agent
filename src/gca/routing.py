@@ -83,16 +83,12 @@ class RoutingPolicy:
 
         workflow = str(raw.get("workflow", WORKFLOW_AUTO))
         if workflow not in WORKFLOWS:
-            raise RoutingConfigError(
-                f"workflow must be one of: {', '.join(sorted(WORKFLOWS))}"
-            )
+            raise RoutingConfigError(f"workflow must be one of: {', '.join(sorted(WORKFLOWS))}")
 
         model_preferences = _string_mapping(raw.get("models", {}), "models")
         _validate_role_keys(model_preferences, "models")
 
-        minimum_strength = _score_mapping(
-            raw.get("minimum_strength", {}), "minimum_strength"
-        )
+        minimum_strength = _score_mapping(raw.get("minimum_strength", {}), "minimum_strength")
         _validate_role_keys(minimum_strength, "minimum_strength")
 
         max_review_cycles = _integer(
@@ -112,9 +108,7 @@ class RoutingPolicy:
         }
         unknown_complexity = sorted(set(complexity_raw) - allowed_complexity)
         if unknown_complexity:
-            raise RoutingConfigError(
-                f"unknown complexity keys: {', '.join(unknown_complexity)}"
-            )
+            raise RoutingConfigError(f"unknown complexity keys: {', '.join(unknown_complexity)}")
 
         feature_threshold = _integer(
             complexity_raw.get("feature_threshold", 3),
@@ -129,9 +123,7 @@ class RoutingPolicy:
             maximum=10,
         )
         if feature_threshold > large_threshold:
-            raise RoutingConfigError(
-                "complexity.feature_threshold must not exceed large_threshold"
-            )
+            raise RoutingConfigError("complexity.feature_threshold must not exceed large_threshold")
 
         return cls(
             workflow=workflow,
@@ -140,15 +132,11 @@ class RoutingPolicy:
             max_review_cycles=max_review_cycles,
             feature_threshold=feature_threshold,
             large_threshold=large_threshold,
-            small_keywords=_keywords(
-                complexity_raw.get("small_keywords"), DEFAULT_SMALL_KEYWORDS
-            ),
+            small_keywords=_keywords(complexity_raw.get("small_keywords"), DEFAULT_SMALL_KEYWORDS),
             feature_keywords=_keywords(
                 complexity_raw.get("feature_keywords"), DEFAULT_FEATURE_KEYWORDS
             ),
-            large_keywords=_keywords(
-                complexity_raw.get("large_keywords"), DEFAULT_LARGE_KEYWORDS
-            ),
+            large_keywords=_keywords(complexity_raw.get("large_keywords"), DEFAULT_LARGE_KEYWORDS),
         )
 
     def preferred_model(self, role: str) -> str | None:

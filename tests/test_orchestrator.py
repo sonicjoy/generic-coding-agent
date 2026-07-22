@@ -24,12 +24,8 @@ def _registry(
     strong: ScriptedProvider,
 ) -> ModelRegistry:
     registry = ModelRegistry()
-    registry.register(
-        ModelProfile("fast", fast, strength=2, speed=5, cost=1)
-    )
-    registry.register(
-        ModelProfile("strong", strong, strength=5, speed=2, cost=5)
-    )
+    registry.register(ModelProfile("fast", fast, strength=2, speed=5, cost=1))
+    registry.register(ModelProfile("strong", strong, strength=5, speed=2, cost=5))
     return registry
 
 
@@ -58,15 +54,7 @@ def test_small_task_uses_single_fast_agent(tmp_path: Path) -> None:
 
 def test_agents_md_can_override_workflow_and_model(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_text(
-        (
-            "---\n"
-            "gca:\n"
-            "  workflow: fast\n"
-            "  models:\n"
-            "    fast: strong\n"
-            "---\n"
-            "Follow project rules.\n"
-        ),
+        ("---\ngca:\n  workflow: fast\n  models:\n    fast: strong\n---\nFollow project rules.\n"),
         encoding="utf-8",
     )
     fast = RecordingScriptedProvider.from_script([])
@@ -119,7 +107,7 @@ def test_feature_workflow_routes_separate_agents(tmp_path: Path) -> None:
                         "name": "run_command",
                         "arguments": {
                             "command": (
-                                "python -c \"import greeting; "
+                                'python -c "import greeting; '
                                 "assert greeting.greet('Ada') == 'Hello, Ada!'\""
                             )
                         },
@@ -149,8 +137,8 @@ def test_feature_workflow_routes_separate_agents(tmp_path: Path) -> None:
                             "path": "greeting.py",
                             "content": (
                                 "def greet(name):\n"
-                                "    \"\"\"Return a greeting.\"\"\"\n"
-                                "    return f\"Hello, {name}!\"\n"
+                                '    """Return a greeting."""\n'
+                                '    return f"Hello, {name}!"\n'
                             ),
                         },
                     }
