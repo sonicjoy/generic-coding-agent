@@ -29,6 +29,9 @@ or the step budget is exhausted.
   `run_command` (tests, linters, formatters, builds, dev servers, analysis).
 - **Safe patching**: unified diffs are validated then applied atomically; on any
   failure nothing is written.
+- **Shell guardrails**: `run_command` blocks destructive commands (`rm`/`rmdir`/
+  `unlink`, `sudo`, `git push --force`, `git reset --hard`, `git clean -f`,
+  and similar) before they reach the shell.
 - **`AGENTS.md` ingestion**: project instructions are discovered (nested,
   root-first) and injected into the system prompt.
 - **Skills**: `SKILL.md` SOP files are indexed and lazily loaded via `load_skill`.

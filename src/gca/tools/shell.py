@@ -3,6 +3,9 @@
 Runs a shell command inside the workspace with a timeout, capturing combined
 stdout/stderr and the exit code. This backs the agent's ability to run tests,
 linters, formatters, build commands, dev servers, and static-analysis tools.
+
+Destructive commands (``rm``, forced git rewrites, ``sudo``, etc.) are rejected
+before execution by :mod:`gca.tools.safety`.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ import subprocess
 from typing import Any
 
 from gca.tools.base import Tool, ToolContext, ToolResult
+from gca.tools.safety import check_command
 
 _DEFAULT_TIMEOUT = 120
 _MAX_OUTPUT = 20_000
@@ -22,7 +26,10 @@ class RunCommandTool(Tool):
     name = "run_command"
     description = (
         "Run a shell command in the workspace and return its combined stdout/stderr "
-        "and exit code. Use for tests, linters, formatters, builds, and analysis tools."
+        "and exit code. Use for tests, linters, formatters, builds, and analysis tools. "
+        "Destructive commands are blocked (rm/rmdir/unlink, sudo, git push --force, "
+        "git reset --hard, git clean -f, and similar). Prefer delete_file and "
+        "apply_patch for intentional file changes."
     )
     parameters = {
         "type": "object",
@@ -38,6 +45,11 @@ class RunCommandTool(Tool):
 
     def run(self, ctx: ToolContext, **kwargs: Any) -> ToolResult:
         command = str(kwargs["command"])
+        blocked = check_command(command)
+        if blocked is not None:
+            return ToolResult.failure(
+                f"blocked by safety guardrail ({blocked.rule}): {blocked.reason}"
+            )
         timeout = int(kwargs.get("timeout", _DEFAULT_TIMEOUT))
         try:
             proc = subprocess.run(

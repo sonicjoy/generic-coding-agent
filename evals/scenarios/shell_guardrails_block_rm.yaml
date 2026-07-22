@@ -1,0 +1,34 @@
+id: shell_guardrails_block_rm
+description: run_command must reject rm before execution; delete_file remains the safe path.
+task: Fix a typo by removing a leftover scratch file safely
+max_steps: 5
+scripts:
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: scratch.tmp
+            content: leftover
+    - tool_calls:
+        - name: run_command
+          arguments:
+            command: rm -rf scratch.tmp
+    - tool_calls:
+        - name: delete_file
+          arguments:
+            path: scratch.tmp
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Removed scratch.tmp via delete_file after rm was blocked.
+  strong: []
+expect:
+  status: completed
+  workflow: fast
+  final_contains: delete_file
+  max_steps: 5
+  script_calls:
+    fast: 4
+    strong: 0
+  absent_files:
+    - scratch.tmp
