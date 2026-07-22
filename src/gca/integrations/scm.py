@@ -342,7 +342,9 @@ def _enforce_diff(
             f"exceeding limit {policy.max_changed_lines}"
         )
     for path in files:
-        if policy.denied_paths and any(fnmatch.fnmatch(path, pattern) for pattern in policy.denied_paths):
+        if policy.denied_paths and any(
+            fnmatch.fnmatch(path, pattern) for pattern in policy.denied_paths
+        ):
             raise PublicationError(f"diff contains denied path: {path}")
         if policy.allowed_paths and not any(
             fnmatch.fnmatch(path, pattern) for pattern in policy.allowed_paths

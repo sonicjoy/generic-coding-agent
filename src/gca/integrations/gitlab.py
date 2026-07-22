@@ -84,9 +84,7 @@ class GitLabWebhookNormalizer:
             raise WebhookVerificationError("invalid GitLab webhook token")
 
     def delivery_id(self, context: WebhookContext) -> str:
-        delivery = context.header("X-Gitlab-Event-UUID") or context.header(
-            "X-Gitlab-Webhook-UUID"
-        )
+        delivery = context.header("X-Gitlab-Event-UUID") or context.header("X-Gitlab-Webhook-UUID")
         if not delivery:
             raise WebhookPayloadError("missing GitLab delivery UUID")
         return delivery
