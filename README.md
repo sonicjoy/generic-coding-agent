@@ -312,17 +312,16 @@ of every agent's system context.
 
 ## Usage
 
+See [Quick start in your project](#quick-start-in-your-project) for the full
+setup flow. Short examples:
+
 ```bash
-# Run with models.yaml + env key (no plugins required)
-export OPENROUTER_API_KEY=...
-cp examples/models.yaml ./models.yaml
+# After models.yaml + .env are in place
 gca run "Fix a typo in README"
-
-# Run a task using a scripted provider and the example word_count plugin
-gca run "Create hello.py" --script script.json --plugins examples/plugins
-
-# Force the multi-agent feature workflow
 gca run "Add search history" --workflow feature
+
+# Offline demo with the scripted provider
+gca run "Create hello.py" --script examples/demo_script.json --plugins examples/plugins
 ```
 
 ## Development
