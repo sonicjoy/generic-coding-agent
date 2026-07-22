@@ -119,7 +119,9 @@ def create_agent(
     """Build a fully-wired :class:`Agent` for the given session."""
 
     repo_config = config.repo_config or load_repo_config(config.workspace)
-    skill_dirs = config.skill_dirs or list(repo_config.skill_dirs) or default_skill_dirs(config.workspace)
+    skill_dirs = (
+        config.skill_dirs or list(repo_config.skill_dirs) or default_skill_dirs(config.workspace)
+    )
     skills = SkillRegistry.discover(skill_dirs)
     registry = build_registry_with_extras(config, skills)
 
@@ -152,7 +154,9 @@ def create_coordinator(
     if len(models) == 0:
         raise ValueError("at least one model must be registered")
     repo_config = config.repo_config or load_repo_config(config.workspace)
-    skill_dirs = config.skill_dirs or list(repo_config.skill_dirs) or default_skill_dirs(config.workspace)
+    skill_dirs = (
+        config.skill_dirs or list(repo_config.skill_dirs) or default_skill_dirs(config.workspace)
+    )
     skills = SkillRegistry.discover(skill_dirs)
     registry = build_registry_with_extras(config, skills, loaded_plugins)
     personas = load_personas(repo_config.context.persona_file, repo_config.context.phase_personas)

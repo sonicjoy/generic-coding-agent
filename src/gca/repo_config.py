@@ -268,7 +268,8 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
 
 
 def _parse_context(workspace: Path, raw: dict[str, Any]) -> ContextSettings:
-    _reject_unknown(raw, {"files", "include_frontmatter", "persona_file", "phase_personas"}, "context")
+    allowed = {"files", "include_frontmatter", "persona_file", "phase_personas"}
+    _reject_unknown(raw, allowed, "context")
     files = _context_filenames(raw.get("files", list(CONTEXT_FILENAMES)))
     include = _boolean(raw.get("include_frontmatter", False), "context.include_frontmatter")
     persona_file = _optional_path(workspace, raw.get("persona_file"), "context.persona_file")
@@ -319,8 +320,7 @@ def _parse_tools(workspace: Path, raw: dict[str, Any]) -> ToolPolicyConfig:
 
     commands_raw = _mapping(raw.get("fixed_commands", {}), "tools.fixed_commands")
     commands = {
-        name: _parse_fixed_command(workspace, name, value)
-        for name, value in commands_raw.items()
+        name: _parse_fixed_command(workspace, name, value) for name, value in commands_raw.items()
     }
     overlap = sorted(deny & set(commands))
     if overlap:
@@ -350,10 +350,9 @@ def _parse_fixed_command(workspace: Path, raw_name: object, value: object) -> Fi
     )
     unknown_phases = sorted(phases - PHASE_NAMES)
     if unknown_phases:
-        raise RepoConfigError(f"unknown phases for fixed command {name}: {', '.join(unknown_phases)}")
-    parameters_raw = _mapping(
-        raw.get("parameters", {}), f"tools.fixed_commands.{name}.parameters"
-    )
+        details = ", ".join(unknown_phases)
+        raise RepoConfigError(f"unknown phases for fixed command {name}: {details}")
+    parameters_raw = _mapping(raw.get("parameters", {}), f"tools.fixed_commands.{name}.parameters")
     parameters = {
         parameter: _parse_command_parameter(name, parameter, parameter_raw)
         for parameter, parameter_raw in parameters_raw.items()
@@ -377,9 +376,15 @@ def _parse_command_parameter(
     _reject_unknown(raw, {"type", "flag", "choices", "required"}, f"parameter {command}.{name}")
     kind = str(raw.get("type", "string"))
     if kind not in {"string", "integer", "boolean"}:
-        raise RepoConfigError(f"parameter {command}.{name} type must be string, integer, or boolean")
+        raise RepoConfigError(
+            f"parameter {command}.{name} type must be string, integer, or boolean"
+        )
     flag_value = raw.get("flag")
-    flag = None if flag_value is None else _nonempty_string(flag_value, f"parameter {command}.{name}.flag")
+    flag = (
+        None
+        if flag_value is None
+        else _nonempty_string(flag_value, f"parameter {command}.{name}.flag")
+    )
     choices = tuple(_string_list(raw.get("choices", []), f"parameter {command}.{name}.choices"))
     required = _boolean(raw.get("required", False), f"parameter {command}.{name}.required")
     return CommandParameterConfig(type=kind, flag=flag, choices=choices, required=required)

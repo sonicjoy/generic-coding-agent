@@ -174,7 +174,8 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         raise RuntimeError("repository configuration was not loaded")
     print(f"configuration valid (version {repo_config.version})")
     print(f"models: {', '.join(loaded.models.names())}")
-    print(f"skills: {', '.join(config.skill_dirs and [str(path) for path in config.skill_dirs] or [])}")
+    skill_paths = [str(path) for path in config.skill_dirs or []]
+    print(f"skills: {', '.join(skill_paths)}")
     print(f"tools: {', '.join(coordinator.tools.names())}")
     print(f"profile: {repo_config.runtime.profile}")
     return 0

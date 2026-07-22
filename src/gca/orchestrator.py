@@ -176,10 +176,7 @@ class RunCoordinator:
             self._emit("[routing] warning: registered model metadata changed since session start")
         if workflow.policy_fingerprint and workflow.policy_fingerprint != self.policy.fingerprint():
             self._emit("[routing] warning: AGENTS.md routing changed; using saved model bindings")
-        if (
-            workflow.config_fingerprint
-            and workflow.config_fingerprint != self.config_fingerprint
-        ):
+        if workflow.config_fingerprint and workflow.config_fingerprint != self.config_fingerprint:
             self._emit("[routing] warning: repository configuration changed since session start")
         needed_roles = self._needed_model_roles(workflow)
         for role in needed_roles:

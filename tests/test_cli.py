@@ -77,9 +77,7 @@ models:
     assert loaded.models.names() == ["cheap"]
 
 
-def test_cli_validate_uses_manifest_without_model_call(
-    tmp_path: Path, capsys: object
-) -> None:
+def test_cli_validate_uses_manifest_without_model_call(tmp_path: Path, capsys: object) -> None:
     gca_dir = tmp_path / ".gca"
     gca_dir.mkdir()
     (gca_dir / "config.yaml").write_text(
