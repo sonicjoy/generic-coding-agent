@@ -27,7 +27,11 @@ def load_runtime_models(
 
     _load_dotenv_files(config)
     loaded = load_configured_plugins(config)
-    catalog_paths = list(default_model_config_paths(config.workspace))
+    catalog_paths = (
+        [Path.home() / ".gca" / "models.yaml"]
+        if config.trusted_model_paths_only
+        else list(default_model_config_paths(config.workspace))
+    )
     if config.models_paths:
         catalog_paths.extend(config.models_paths)
     try:
@@ -62,6 +66,8 @@ def load_runtime_models(
 
 
 def _load_dotenv_files(config: RuntimeConfig) -> None:
+    if config.trusted_model_paths_only:
+        return
     load_dotenv(Path.home() / ".gca" / ".env")
     load_dotenv(config.workspace / ".env")
     load_dotenv(config.workspace / ".gca" / ".env")

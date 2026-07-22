@@ -56,10 +56,15 @@ def test_prepare_repository_clones_local_fixture_when_explicitly_allowed(
 def test_prepare_repository_rejects_local_and_credential_urls(tmp_path: Path) -> None:
     source = _source_repository(tmp_path)
 
-    with pytest.raises(WorkspaceError, match="HTTPS or SSH"):
+    with pytest.raises(WorkspaceError, match="HTTPS"):
         prepare_repository(RepositorySpec(str(source)), tmp_path / "checkout")
     with pytest.raises(WorkspaceError, match="credentials"):
         prepare_repository(
             RepositorySpec("https://token@example.test/repo.git"),
             tmp_path / "other",
+        )
+    with pytest.raises(WorkspaceError, match="query parameters"):
+        prepare_repository(
+            RepositorySpec("https://example.test/repo.git?token=secret"),
+            tmp_path / "query",
         )

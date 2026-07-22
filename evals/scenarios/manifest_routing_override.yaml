@@ -1,0 +1,21 @@
+id: manifest_routing_override
+description: Repository manifest routing overrides deterministic feature classification.
+task: Implement a new authentication feature across the application
+config_yaml: |
+  version: 1
+  routing:
+    workflow: fast
+scripts:
+  fast:
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Manifest-selected fast run completed.
+  strong: []
+expect:
+  status: completed
+  workflow: fast
+  active_model: fast
+  script_calls:
+    fast: 1
+    strong: 0

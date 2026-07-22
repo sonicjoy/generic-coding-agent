@@ -9,13 +9,14 @@ from __future__ import annotations
 from typing import Any
 
 from gca.paths import IGNORED_DIRS
-from gca.tools.base import Tool, ToolContext, ToolResult
+from gca.tools.base import Tool, ToolContext, ToolError, ToolResult
 
 
 class ExploreTool(Tool):
     """List the project structure as an indented tree (a quick way to orient)."""
 
     name = "explore"
+    capabilities = frozenset({"read_fs"})
     description = (
         "List the directory structure under a path (relative to the workspace) as an "
         "indented tree. Use this to understand project layout before reading files."
@@ -42,8 +43,19 @@ class ExploreTool(Tool):
         def walk(directory: Any, depth: int) -> None:
             if depth > max_depth:
                 return
+
+            def visible(entry: Any) -> bool:
+                if entry.name in IGNORED_DIRS:
+                    return False
+                try:
+                    relative = entry.relative_to(ctx.workspace.resolve())
+                    ctx.resolve(str(relative))
+                except (ToolError, ValueError):
+                    return False
+                return True
+
             entries = sorted(
-                (e for e in directory.iterdir() if e.name not in IGNORED_DIRS),
+                (entry for entry in directory.iterdir() if visible(entry)),
                 key=lambda e: (e.is_file(), e.name.lower()),
             )
             for entry in entries:
@@ -63,6 +75,7 @@ class ReadFileTool(Tool):
     """Read a text file, optionally a line range."""
 
     name = "read_file"
+    capabilities = frozenset({"read_fs"})
     description = "Read the contents of a text file (relative to the workspace)."
     parameters = {
         "type": "object",
@@ -101,6 +114,7 @@ class WriteFileTool(Tool):
     """Overwrite (or create) a file with the given content."""
 
     name = "write_file"
+    capabilities = frozenset({"write_fs"})
     description = "Write content to a file (relative to the workspace), overwriting if it exists."
     parameters = {
         "type": "object",
@@ -124,6 +138,7 @@ class CreateFileTool(Tool):
     """Create a new file; fails if it already exists."""
 
     name = "create_file"
+    capabilities = frozenset({"write_fs"})
     description = "Create a new file (relative to the workspace). Fails if the file already exists."
     parameters = {
         "type": "object",
@@ -149,6 +164,7 @@ class DeleteFileTool(Tool):
     """Delete a file."""
 
     name = "delete_file"
+    capabilities = frozenset({"write_fs"})
     description = "Delete a file (relative to the workspace)."
     parameters = {
         "type": "object",
@@ -171,6 +187,7 @@ class MoveFileTool(Tool):
     """Move or rename a file."""
 
     name = "move_file"
+    capabilities = frozenset({"write_fs"})
     description = "Move or rename a file (both paths relative to the workspace)."
     parameters = {
         "type": "object",

@@ -1,0 +1,22 @@
+id: manifest_tool_deny
+description: A global manifest deny removes a mutating tool from the fast agent.
+task: Fix a typo in README
+config_yaml: |
+  version: 1
+  tools:
+    deny: [delete_file]
+scripts:
+  fast:
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Completed without delete access.
+  strong: []
+expect:
+  status: completed
+  workflow: fast
+  tool_exposure:
+    - script: fast
+      call: 0
+      requires: [read_file, apply_patch]
+      forbids: [delete_file]

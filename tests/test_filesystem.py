@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from gca.tools.base import ExecutionPolicy, ToolContext, ToolError
 from gca.tools.filesystem import (
     CreateFileTool,
@@ -78,3 +80,27 @@ def test_read_file_enforces_size_limit(tmp_path: Path) -> None:
 
     assert not result.ok
     assert "exceeds read limit" in result.output
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [".env", ".env.local", ".gca/.env", ".gca/sessions/run.json", ".git/config"],
+)
+def test_secret_and_runtime_paths_are_protected(tmp_path: Path, relative: str) -> None:
+    with pytest.raises(ToolError, match="protected"):
+        _ctx(tmp_path).resolve(relative)
+
+
+def test_env_example_remains_accessible(tmp_path: Path) -> None:
+    target = _ctx(tmp_path).resolve(".env.example")
+    assert target == tmp_path / ".env.example"
+
+
+def test_explore_and_search_hide_protected_files(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("TOKEN=secret-marker\n", encoding="utf-8")
+
+    explored = ExploreTool().run(_ctx(tmp_path), path=".").output
+    searched = SearchTool().run(_ctx(tmp_path), pattern="secret-marker").output
+
+    assert ".env" not in explored
+    assert searched == "no matches"

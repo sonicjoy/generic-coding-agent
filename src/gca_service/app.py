@@ -7,7 +7,7 @@ from starlette.routing import Route
 
 from gca_service.config import ServiceSettings
 from gca_service.routes.health import health, ready
-from gca_service.routes.runs import cancel_run, create_run, get_run
+from gca_service.routes.runs import cancel_run, create_run, get_run, resume_run
 from gca_service.routes.webhooks import receive_webhook
 from gca_service.state import ServiceState
 
@@ -28,6 +28,7 @@ def create_app(
             Route("/runs", create_run, methods=["POST"]),
             Route("/runs/{job_id}", get_run, methods=["GET"]),
             Route("/runs/{job_id}/cancel", cancel_run, methods=["POST"]),
+            Route("/runs/{job_id}/resume", resume_run, methods=["POST"]),
             Route("/webhooks/{provider}", receive_webhook, methods=["POST"]),
         ],
     )

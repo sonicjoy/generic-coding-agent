@@ -13,6 +13,10 @@ class ToolPolicyError(ValueError):
     """Raised when a tool policy references unavailable or unsafe tools."""
 
 
+_READ_ONLY_CAPABILITIES = frozenset({"control", "knowledge", "read_external", "read_fs"})
+_REVIEW_CAPABILITIES = _READ_ONLY_CAPABILITIES | {"execute"}
+
+
 def register_fixed_commands(registry: ToolRegistry, config: RepoConfig) -> None:
     """Register all fixed commands declared by the repository manifest."""
 
@@ -31,9 +35,24 @@ def validate_tool_policy(registry: ToolRegistry, config: RepoConfig) -> None:
     referenced = set(config.tools.deny)
     for names in config.tools.phases.values():
         referenced.update(names)
+    referenced.update(config.tools.secret_access)
     unknown = sorted(referenced - available)
     if unknown:
         raise ToolPolicyError(f"tool policy references unavailable tools: {', '.join(unknown)}")
+
+
+def validate_all_phase_policies(registry: ToolRegistry, config: RepoConfig) -> None:
+    """Resolve every built-in phase so unsafe manifest escalation fails at startup."""
+
+    validate_tool_policy(registry, config)
+    for workflow in ("fast", "feature"):
+        for phase in get_workflow(workflow).phases:
+            tool_names_for_phase(
+                registry,
+                config,
+                phase.name,
+                workflow=workflow,
+            )
 
 
 def tool_names_for_phase(
@@ -61,6 +80,23 @@ def tool_names_for_phase(
     if config.runtime.profile == "hosted" and not explicitly_allows_shell:
         names.discard("run_command")
     names.add(FINISH_TOOL_NAME)
+    capability_limit = {
+        "planning": _READ_ONLY_CAPABILITIES,
+        "review": _REVIEW_CAPABILITIES,
+    }.get(phase)
+    if capability_limit is not None:
+        forbidden: list[str] = []
+        for name in names:
+            tool = registry.get(name)
+            if tool is None:
+                continue
+            if not tool.capabilities or not tool.capabilities <= capability_limit:
+                forbidden.append(name)
+        if forbidden:
+            raise ToolPolicyError(
+                f"phase {phase} cannot expose tools with elevated capabilities: "
+                f"{', '.join(sorted(forbidden))}"
+            )
     return frozenset(name for name in names if registry.get(name) is not None)
 
 

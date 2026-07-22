@@ -15,7 +15,7 @@ _TRANSITIONS = {
         JobStatus.CANCELLED,
     },
     JobStatus.PAUSED: {JobStatus.QUEUED, JobStatus.FAILED, JobStatus.CANCELLED},
-    JobStatus.PUBLISHING: {JobStatus.COMPLETED, JobStatus.FAILED},
+    JobStatus.PUBLISHING: {JobStatus.QUEUED, JobStatus.COMPLETED, JobStatus.FAILED},
     JobStatus.FAILED: {JobStatus.QUEUED},
     JobStatus.COMPLETED: set(),
     JobStatus.CANCELLED: set(),
@@ -37,7 +37,7 @@ def transition_job(job: Job, status: JobStatus, *, error: str = "") -> Job:
     job.updated_at = utc_now()
     if error:
         job.last_error = error
-    if status != JobStatus.RUNNING:
+    if status not in {JobStatus.RUNNING, JobStatus.PUBLISHING}:
         job.lease_owner = None
         job.lease_expires_at = None
     return job

@@ -180,7 +180,7 @@ class Agent:
         if tool is None:
             return (f"error: unknown tool '{name}'", False, False)
         try:
-            result = tool.run(self.context, **arguments)
+            result = tool.run(self.context.for_tool(name), **arguments)
         except ToolError as exc:
             return (self.context.redact(f"error: {exc}"), False, False)
         except Exception as exc:  # defensive: never let a tool crash the loop

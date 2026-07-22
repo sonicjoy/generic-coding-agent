@@ -54,11 +54,14 @@ class SkillRegistry:
     def discover(cls, roots: list[Path]) -> SkillRegistry:
         registry = cls()
         for root in roots:
-            root = Path(root)
+            root = Path(root).resolve()
             if not root.is_dir():
                 continue
             for skill_file in sorted(root.rglob(_SKILL_FILENAME)):
-                skill = _load_skill_file(skill_file)
+                resolved = skill_file.resolve()
+                if root not in resolved.parents:
+                    continue
+                skill = _load_skill_file(resolved)
                 if skill is not None:
                     registry._skills[skill.name] = skill
         return registry
@@ -88,6 +91,7 @@ class LoadSkillTool(Tool):
     """Load the full body of a named skill on demand."""
 
     name = "load_skill"
+    capabilities = frozenset({"knowledge"})
     description = (
         "Load the full instructions for a named skill. Call this when a task matches "
         "a skill's description to retrieve its step-by-step procedure."
@@ -107,6 +111,10 @@ class LoadSkillTool(Tool):
         if skill is None:
             available = ", ".join(self._registry.names()) or "(none)"
             return ToolResult.failure(f"unknown skill: {name}. Available: {available}")
+        if skill.path.stat().st_size > ctx.execution.max_read_bytes:
+            return ToolResult.failure(
+                f"skill exceeds read limit ({ctx.execution.max_read_bytes} bytes): {name}"
+            )
         return ToolResult.success(skill.body())
 
 

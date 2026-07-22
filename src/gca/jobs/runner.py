@@ -10,11 +10,15 @@ from typing import Protocol
 
 from gca.agent import AgentResult, EventHook
 from gca.credentials import CredentialBroker
+from gca.git_credentials import GitCredentials
+from gca.integrations.http import IntegrationHttpError
+from gca.integrations.scm import PublicationError
 from gca.jobs.lifecycle import can_retry, retry_delay_seconds, transition_job
-from gca.jobs.models import Job, JobStatus
+from gca.jobs.models import Job, JobStatus, RepositorySpec
 from gca.jobs.store import JobStore
 from gca.model_loading import load_runtime_models
 from gca.plugins import LoadedPlugins
+from gca.providers.base import ProviderError
 from gca.repo_config import load_repo_config
 from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, SessionStore
@@ -30,6 +34,7 @@ class Publisher(Protocol):
 
 RuntimeModelLoader = Callable[[RuntimeConfig], LoadedPlugins]
 LeaseHeartbeat = Callable[[Job], None]
+RepositoryCredentialResolver = Callable[[RepositorySpec], GitCredentials | None]
 
 
 class JobRunner:
@@ -50,6 +55,7 @@ class JobRunner:
         model_paths: list[Path] | None = None,
         on_event: EventHook | None = None,
         lease_heartbeat: LeaseHeartbeat | None = None,
+        repository_credentials: RepositoryCredentialResolver | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
@@ -63,6 +69,8 @@ class JobRunner:
         self.model_paths = model_paths
         self.on_event = on_event
         self.lease_heartbeat = lease_heartbeat
+        self.repository_credentials = repository_credentials
+        self.credentials = CredentialBroker.from_environment()
 
     def execute(self, job: Job) -> Job:
         """Run a claimed job to a durable terminal, paused, or retry state."""
@@ -73,12 +81,20 @@ class JobRunner:
         layout.ensure_metadata()
         try:
             self._heartbeat(job)
+            repository_destination = layout.repository.resolve()
+            if layout.root not in repository_destination.parents:
+                raise WorkspaceError("repository workspace escapes its job directory")
             repository = prepare_repository(
                 job.run_spec.repository,
-                layout.repository,
+                repository_destination,
                 allowed_hosts=self.allowed_repository_hosts,
                 allow_local=self.allow_local_repositories,
-                env=CredentialBroker.from_environment().subprocess_env("hosted"),
+                env=self.credentials.subprocess_env("local"),
+                credentials=(
+                    self.repository_credentials(job.run_spec.repository)
+                    if self.repository_credentials is not None
+                    else None
+                ),
             )
             job.workspace_path = str(repository)
             self.store.save(job)
@@ -104,8 +120,13 @@ class JobRunner:
             skill_dirs=self.skill_dirs,
             max_steps=max_steps,
             workflow=job.run_spec.workflow,
-            models_paths=self.model_paths or list(repo_config.model_paths) or None,
+            models_paths=(
+                self.model_paths
+                if self.hosted_mode
+                else self.model_paths or list(repo_config.model_paths) or None
+            ),
             repo_config=repo_config,
+            trusted_model_paths_only=self.hosted_mode,
         )
         loaded = self.model_loader(runtime)
         sessions = SessionStore(layout.sessions)
@@ -124,6 +145,7 @@ class JobRunner:
         return coordinator.run(session, sessions)
 
     def _apply_result(self, job: Job, result: AgentResult, repository: Path) -> None:
+        job.result_summary = self.credentials.redact(result.final_message)
         if result.status == STATUS_PAUSED:
             transition_job(job, JobStatus.PAUSED, error=result.final_message)
             self.store.save(job)
@@ -153,8 +175,14 @@ class JobRunner:
         self.store.save(job)
 
     def _handle_failure(self, job: Job, exc: Exception) -> None:
-        message = f"{type(exc).__name__}: {exc}"
-        transient = isinstance(exc, (WorkspaceError, TimeoutError, ConnectionError))
+        message = self.credentials.redact(f"{type(exc).__name__}: {exc}")
+        transient = isinstance(exc, (WorkspaceError, TimeoutError, ConnectionError)) or (
+            isinstance(exc, ProviderError) and exc.retryable
+        ) or (
+            isinstance(exc, IntegrationHttpError) and exc.retryable
+        ) or (
+            isinstance(exc, PublicationError) and exc.retryable
+        )
         if transient and can_retry(job):
             transition_job(job, JobStatus.QUEUED, error=message)
             job.not_before = time.time() + retry_delay_seconds(job.attempt)

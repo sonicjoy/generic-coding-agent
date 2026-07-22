@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from gca.cli import _build_config, _load_models, build_parser, main
+from gca.jobs.store import SqliteJobStore
 
 
 def test_cli_runs_fast_scripted_workflow(tmp_path: Path) -> None:
@@ -152,3 +153,80 @@ def test_cli_job_run_clones_local_repository(tmp_path: Path) -> None:
     )
 
     assert result == 0
+
+
+def test_cli_job_resume_continues_paused_session(tmp_path: Path) -> None:
+    source = tmp_path / "resume-source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=source, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.test"],
+        cwd=source,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Tests"], cwd=source, check=True)
+    (source / "README.md").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial"], cwd=source, check=True, capture_output=True)
+    script = tmp_path / "resume-script.json"
+    script.write_text(
+        json.dumps(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "create_file",
+                            "arguments": {"path": "resumed.txt", "content": "done\n"},
+                        }
+                    ]
+                },
+                {
+                    "tool_calls": [
+                        {
+                            "name": "finish",
+                            "arguments": {"summary": "Resume completed."},
+                        }
+                    ]
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    job_root = tmp_path / "resume-jobs"
+    first = main(
+        [
+            "job",
+            "run",
+            "Fix a typo",
+            "--repository",
+            str(source),
+            "--job-root",
+            str(job_root),
+            "--allow-local-repository",
+            "--script",
+            str(script),
+            "--workflow",
+            "fast",
+            "--max-steps",
+            "1",
+        ]
+    )
+    job = SqliteJobStore(job_root / "jobs.sqlite3").list(limit=1)[0]
+
+    resumed = main(
+        [
+            "job",
+            "resume",
+            job.id,
+            "--job-root",
+            str(job_root),
+            "--allow-local-repository",
+            "--script",
+            str(script),
+            "--max-steps",
+            "2",
+        ]
+    )
+
+    assert first == 1
+    assert resumed == 0

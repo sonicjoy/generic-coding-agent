@@ -36,3 +36,19 @@ def test_catalog_and_load_tool(tmp_path: Path) -> None:
     assert ok.ok and "The procedure." in ok.output
     missing = tool.run(ctx, name="nope")
     assert not missing.ok
+
+
+def test_skill_symlink_cannot_escape_discovery_root(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    linked = root / "linked"
+    linked.mkdir(parents=True)
+    external = tmp_path / "outside.md"
+    external.write_text(
+        "---\nname: escaped\ndescription: outside\n---\nsecret\n",
+        encoding="utf-8",
+    )
+    (linked / "SKILL.md").symlink_to(external)
+
+    registry = SkillRegistry.discover([root])
+
+    assert registry.names() == []

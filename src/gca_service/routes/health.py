@@ -20,6 +20,6 @@ async def ready(request: Request) -> JSONResponse:
     state = service_state(request)
     try:
         state.store.list(limit=1)
-    except Exception as exc:
-        return JSONResponse({"status": "not_ready", "error": str(exc)}, status_code=503)
+    except Exception:
+        return JSONResponse({"status": "not_ready"}, status_code=503)
     return JSONResponse({"status": "ready"})

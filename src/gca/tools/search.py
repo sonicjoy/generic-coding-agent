@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from gca.paths import IGNORED_DIRS
-from gca.tools.base import Tool, ToolContext, ToolResult
+from gca.tools.base import Tool, ToolContext, ToolError, ToolResult
 
 _MAX_MATCHES = 200
 
@@ -15,6 +15,7 @@ class SearchTool(Tool):
     """Search file contents with a regular expression, returning ``path:line: text``."""
 
     name = "search"
+    capabilities = frozenset({"read_fs"})
     description = (
         "Search text files under a path for a regular expression. Returns matching "
         "lines as 'path:line: text'. Use to locate symbols, imports, or usages."
@@ -53,6 +54,11 @@ class SearchTool(Tool):
                 continue
             if any(part in IGNORED_DIRS for part in file.parts):
                 continue
+            rel = file.relative_to(workspace_root)
+            try:
+                ctx.resolve(str(rel))
+            except ToolError:
+                continue
             if suffix and not file.name.endswith(str(suffix)):
                 continue
             if file.stat().st_size > ctx.execution.max_read_bytes:
@@ -61,7 +67,6 @@ class SearchTool(Tool):
                 text = file.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
-            rel = file.relative_to(workspace_root)
             for lineno, line in enumerate(text.splitlines(), start=1):
                 if regex.search(line):
                     matches.append(f"{rel}:{lineno}: {line.strip()}")

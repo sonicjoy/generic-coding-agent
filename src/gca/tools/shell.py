@@ -24,6 +24,8 @@ class RunCommandTool(Tool):
     """Execute a shell command within the workspace and capture its output."""
 
     name = "run_command"
+    capabilities = frozenset({"execute"})
+    risk = "high"
     description = (
         "Run a shell command in the workspace and return its combined stdout/stderr "
         "and exit code. Use for tests, linters, formatters, builds, and analysis tools. "

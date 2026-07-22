@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from gca.integrations.scm import PublicationPolicy
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
 from gca.jobs.queue import SqliteJobQueue
 from gca.jobs.runner import JobRunner
-from gca.jobs.store import SqliteJobStore
+from gca.jobs.store import JobNotFoundError, SqliteJobStore
 from gca.model_loading import load_runtime_models
 from gca.plugins import LoadedPlugins
 from gca.repo_config import RepoConfigError, load_repo_config
@@ -20,6 +21,13 @@ from gca.session import SessionStore
 
 def _default_sessions_dir(workspace: Path) -> Path:
     return workspace / ".gca" / "sessions"
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
 
 
 def _build_config(args: argparse.Namespace) -> RuntimeConfig:
@@ -44,7 +52,11 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
         sessions_dir=sessions_dir,
         plugins_dir=plugins_dir,
         skill_dirs=skill_dirs,
-        max_steps=args.max_steps or repo_config.runtime.max_steps,
+        max_steps=(
+            args.max_steps
+            if args.max_steps is not None
+            else repo_config.runtime.max_steps
+        ),
         workflow=args.workflow,
         models_paths=models_paths or None,
         repo_config=repo_config,
@@ -165,7 +177,41 @@ def _cmd_job_run(args: argparse.Namespace) -> int:
         print(f"status: {job.status.value}")
         return 0 if job.status == JobStatus.COMPLETED else 1
     queue.enqueue(job.id)
-    claimed = queue.claim("local-cli", lease_seconds=args.lease_seconds)
+    return _execute_local_job(args, store, queue, job.id)
+
+
+def _cmd_job_resume(args: argparse.Namespace) -> int:
+    """Resume one paused local job with a larger total step budget."""
+
+    job_root = Path(args.job_root).resolve()
+    store = SqliteJobStore(job_root / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    try:
+        job = store.load(args.job_id)
+    except JobNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
+    if job.status != JobStatus.PAUSED:
+        raise SystemExit(f"job cannot be resumed from {job.status.value}")
+    prior = job.run_spec.max_steps or 0
+    if args.max_steps <= prior:
+        raise SystemExit("--max-steps must exceed the prior job step budget")
+    job.run_spec = replace(job.run_spec, max_steps=args.max_steps)
+    store.save(job)
+    queue.enqueue(job.id)
+    return _execute_local_job(args, store, queue, job.id)
+
+
+def _execute_local_job(
+    args: argparse.Namespace,
+    store: SqliteJobStore,
+    queue: SqliteJobQueue,
+    job_id: str,
+) -> int:
+    claimed = queue.claim_job(
+        job_id,
+        "local-cli",
+        lease_seconds=args.lease_seconds,
+    )
     if claimed is None:
         raise SystemExit("job could not be claimed")
 
@@ -197,6 +243,17 @@ def _cmd_job_run(args: argparse.Namespace) -> int:
     return 0 if result.status == JobStatus.COMPLETED else 1
 
 
+def _add_job_runtime_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--job-root", default=".gca/jobs")
+    parser.add_argument("--lease-seconds", type=_positive_int, default=900)
+    parser.add_argument("--allowed-host", action="append", default=None)
+    parser.add_argument("--allow-local-repository", action="store_true")
+    parser.add_argument("--plugins", default=None)
+    parser.add_argument("--models", action="append", default=None)
+    parser.add_argument("--skills", action="append", default=None)
+    parser.add_argument("--script", default=None)
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", default=".", help="Workspace root (default: cwd).")
     parser.add_argument("--sessions-dir", default=None, help="Where to store sessions.")
@@ -212,7 +269,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--max-steps",
-        type=int,
+        type=_positive_int,
         default=None,
         help="Max agent steps (default: repository config or 25).",
     )
@@ -253,23 +310,22 @@ def build_parser() -> argparse.ArgumentParser:
     job_run.add_argument("task", help="Task description for the agent.")
     job_run.add_argument("--repository", required=True, help="HTTPS, SSH, or allowed local repo.")
     job_run.add_argument("--ref", default="main", help="Branch or tag to clone.")
-    job_run.add_argument("--shallow-depth", type=int, default=1)
-    job_run.add_argument("--job-root", default=".gca/jobs")
+    job_run.add_argument("--shallow-depth", type=_positive_int, default=1)
+    _add_job_runtime_options(job_run)
     job_run.add_argument("--idempotency-key", default=None)
-    job_run.add_argument("--lease-seconds", type=int, default=900)
-    job_run.add_argument("--allowed-host", action="append", default=None)
-    job_run.add_argument("--allow-local-repository", action="store_true")
-    job_run.add_argument("--plugins", default=None)
-    job_run.add_argument("--models", action="append", default=None)
-    job_run.add_argument("--skills", action="append", default=None)
-    job_run.add_argument("--script", default=None)
-    job_run.add_argument("--max-steps", type=int, default=None)
+    job_run.add_argument("--max-steps", type=_positive_int, default=None)
     job_run.add_argument(
         "--workflow",
         choices=["auto", "fast", "feature"],
         default=None,
     )
     job_run.set_defaults(func=_cmd_job_run)
+
+    job_resume = job_commands.add_parser("resume", help="Resume a paused repository job.")
+    job_resume.add_argument("job_id")
+    _add_job_runtime_options(job_resume)
+    job_resume.add_argument("--max-steps", type=_positive_int, required=True)
+    job_resume.set_defaults(func=_cmd_job_resume)
 
     return parser
 

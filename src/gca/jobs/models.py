@@ -6,6 +6,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -37,10 +38,19 @@ class RepositorySpec:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RepositorySpec:
+        url = data.get("url")
+        ref = data.get("ref", "main")
+        depth = data.get("shallow_depth", 1)
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("repository.url must be a non-empty string")
+        if not isinstance(ref, str) or not ref.strip():
+            raise ValueError("repository.ref must be a non-empty string")
+        if isinstance(depth, bool) or not isinstance(depth, int):
+            raise ValueError("repository.shallow_depth must be an integer")
         return cls(
-            url=str(data["url"]),
-            ref=str(data.get("ref", "main")),
-            shallow_depth=int(data.get("shallow_depth", 1)),
+            url=url,
+            ref=ref,
+            shallow_depth=depth,
         )
 
 
@@ -55,11 +65,23 @@ class PublicationTarget:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PublicationTarget:
+        provider = data.get("provider")
+        base_ref = data.get("base_ref", "main")
+        branch_prefix = data.get("branch_prefix", "gca/")
+        draft = data.get("draft", False)
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("publication.provider must be a non-empty string")
+        if not isinstance(base_ref, str) or not base_ref.strip():
+            raise ValueError("publication.base_ref must be a non-empty string")
+        if not isinstance(branch_prefix, str) or not branch_prefix.strip():
+            raise ValueError("publication.branch_prefix must be a non-empty string")
+        if not isinstance(draft, bool):
+            raise ValueError("publication.draft must be a boolean")
         return cls(
-            provider=str(data["provider"]),
-            base_ref=str(data.get("base_ref", "main")),
-            branch_prefix=str(data.get("branch_prefix", "gca/")),
-            draft=bool(data.get("draft", False)),
+            provider=provider,
+            base_ref=base_ref,
+            branch_prefix=branch_prefix,
+            draft=draft,
         )
 
 
@@ -79,21 +101,39 @@ class RunSpec:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RunSpec:
+        task = data.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("run spec requires a non-empty task string")
         repository_raw = data.get("repository")
-        if not isinstance(repository_raw, dict):
+        if not isinstance(repository_raw, Mapping):
             raise ValueError("run spec requires a repository mapping")
         publication_raw = data.get("publication")
+        if publication_raw is not None and not isinstance(publication_raw, Mapping):
+            raise ValueError("publication must be a mapping")
+        workflow = data.get("workflow")
+        if workflow is not None and not isinstance(workflow, str):
+            raise ValueError("workflow must be a string")
+        max_steps = data.get("max_steps")
+        if max_steps is not None and (
+            isinstance(max_steps, bool) or not isinstance(max_steps, int)
+        ):
+            raise ValueError("max_steps must be an integer")
+        labels_raw = data.get("labels", {})
+        if not isinstance(labels_raw, Mapping):
+            raise ValueError("labels must be a mapping")
+        if not all(isinstance(key, str) and isinstance(value, str) for key, value in labels_raw.items()):
+            raise ValueError("labels must be a string mapping")
         return cls(
-            task=str(data["task"]),
-            repository=RepositorySpec.from_dict(repository_raw),
-            workflow=(str(data["workflow"]) if data.get("workflow") is not None else None),
-            max_steps=(int(data["max_steps"]) if data.get("max_steps") is not None else None),
+            task=task,
+            repository=RepositorySpec.from_dict(dict(repository_raw)),
+            workflow=workflow,
+            max_steps=max_steps,
             publication=(
-                PublicationTarget.from_dict(publication_raw)
-                if isinstance(publication_raw, dict)
+                PublicationTarget.from_dict(dict(publication_raw))
+                if isinstance(publication_raw, Mapping)
                 else None
             ),
-            labels={str(key): str(value) for key, value in data.get("labels", {}).items()},
+            labels=dict(labels_raw),
         )
 
 
@@ -110,6 +150,7 @@ class Job:
     session_id: str | None = None
     workspace_path: str | None = None
     publication: dict[str, Any] = field(default_factory=dict)
+    result_summary: str = ""
     last_error: str = ""
     lease_owner: str | None = None
     lease_expires_at: float | None = None
@@ -131,6 +172,7 @@ class Job:
             "session_id": self.session_id,
             "workspace_path": self.workspace_path,
             "publication": self.publication,
+            "result_summary": self.result_summary,
             "last_error": self.last_error,
             "lease_owner": self.lease_owner,
             "lease_expires_at": self.lease_expires_at,
@@ -156,6 +198,7 @@ class Job:
             session_id=(str(data["session_id"]) if data.get("session_id") else None),
             workspace_path=(str(data["workspace_path"]) if data.get("workspace_path") else None),
             publication=dict(data.get("publication", {})),
+            result_summary=str(data.get("result_summary", "")),
             last_error=str(data.get("last_error", "")),
             lease_owner=(str(data["lease_owner"]) if data.get("lease_owner") else None),
             lease_expires_at=(

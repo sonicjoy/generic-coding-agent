@@ -69,6 +69,14 @@ def test_can_preserve_frontmatter_for_legacy_prompt(tmp_path: Path) -> None:
     assert "gca:" in prompt
 
 
+def test_context_symlink_cannot_escape_workspace(tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-outside.md"
+    external.write_text("outside secret", encoding="utf-8")
+    (tmp_path / "AGENTS.md").symlink_to(external)
+
+    assert build_context_prompt(tmp_path) == ""
+
+
 def test_rejects_invalid_gca_frontmatter(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_text(
         "---\ngca: invalid\n---\nrules\n",

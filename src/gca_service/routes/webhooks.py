@@ -14,7 +14,12 @@ from gca.jobs.models import JobStatus
 from gca.jobs.store import IdempotencyConflictError
 from gca.workspace.prepare import WorkspaceError, validate_repository_spec
 from gca_service.config import ServiceSettings
-from gca_service.routes.common import job_payload, service_state
+from gca_service.routes.common import (
+    RequestBodyTooLarge,
+    job_payload,
+    read_body,
+    service_state,
+)
 
 
 async def receive_webhook(request: Request) -> Response:
@@ -31,12 +36,12 @@ async def receive_webhook(request: Request) -> Response:
             {"error": f"{provider} webhooks are not configured"},
             status_code=503,
         )
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > state.settings.max_request_bytes:
-        return JSONResponse({"error": "request body is too large"}, status_code=413)
-    body = await request.body()
-    if len(body) > state.settings.max_request_bytes:
-        return JSONResponse({"error": "request body is too large"}, status_code=413)
+    try:
+        body = await read_body(request, max_bytes=state.settings.max_request_bytes)
+    except RequestBodyTooLarge as exc:
+        return JSONResponse({"error": str(exc)}, status_code=413)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     context = WebhookContext(
         provider=provider,
         headers=dict(request.headers),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +59,7 @@ class ToolPolicyConfig:
     deny: frozenset[str] = frozenset()
     phases: dict[str, frozenset[str]] = field(default_factory=dict)
     fixed_commands: dict[str, FixedCommandConfig] = field(default_factory=dict)
+    secret_access: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,6 @@ class RepoConfig:
     routing: RoutingPolicy = field(default_factory=RoutingPolicy)
     model_paths: tuple[Path, ...] = ()
     publication: dict[str, Any] = field(default_factory=dict)
-    service: dict[str, Any] = field(default_factory=dict)
 
     def fingerprint(self) -> str:
         """Return a stable hash used for resume diagnostics."""
@@ -147,12 +148,15 @@ class RepoConfig:
                     }
                     for name, command in sorted(self.tools.fixed_commands.items())
                 },
+                "secret_access": {
+                    name: sorted(secrets)
+                    for name, secrets in sorted(self.tools.secret_access.items())
+                },
             },
             "runtime": self.runtime.__dict__,
             "routing": self.routing.fingerprint(),
             "model_paths": [_relative(self.workspace, path) for path in self.model_paths],
             "publication": self.publication,
-            "service": self.service,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         return hashlib.sha256(encoded).hexdigest()
@@ -218,7 +222,6 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
         "routing",
         "models",
         "publication",
-        "service",
     }
     _reject_unknown(raw, allowed, "repository configuration")
     version = raw.get("version", CONFIG_VERSION)
@@ -250,8 +253,9 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
     except ValueError as exc:
         raise RepoConfigError(str(exc)) from exc
 
-    publication = _mapping(raw.get("publication", {}), "publication")
-    service = _mapping(raw.get("service", {}), "service")
+    publication = _parse_publication(
+        _mapping(raw.get("publication", {}), "publication")
+    )
     return RepoConfig(
         workspace=workspace,
         version=version,
@@ -263,7 +267,6 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
         routing=routing,
         model_paths=model_paths,
         publication=publication,
-        service=service,
     )
 
 
@@ -304,7 +307,7 @@ def _parse_plugins(workspace: Path, raw: dict[str, Any]) -> PluginConfig:
 
 
 def _parse_tools(workspace: Path, raw: dict[str, Any]) -> ToolPolicyConfig:
-    _reject_unknown(raw, {"deny", "phases", "fixed_commands"}, "tools")
+    _reject_unknown(raw, {"deny", "phases", "fixed_commands", "secret_access"}, "tools")
     deny = frozenset(_string_list(raw.get("deny", []), "tools.deny"))
     phases_raw = _mapping(raw.get("phases", {}), "tools.phases")
     unknown_phases = sorted(set(phases_raw) - PHASE_NAMES)
@@ -325,17 +328,48 @@ def _parse_tools(workspace: Path, raw: dict[str, Any]) -> ToolPolicyConfig:
     overlap = sorted(deny & set(commands))
     if overlap:
         raise RepoConfigError(f"fixed commands are also denied: {', '.join(overlap)}")
-    return ToolPolicyConfig(deny=deny, phases=phases, fixed_commands=commands)
+    secrets_raw = _mapping(raw.get("secret_access", {}), "tools.secret_access")
+    secret_access = {
+        tool_name: frozenset(
+            _string_list(secret_names, f"tools.secret_access.{tool_name}")
+        )
+        for tool_name, secret_names in secrets_raw.items()
+    }
+    for tool_name, secret_names in secret_access.items():
+        invalid = sorted(
+            name for name in secret_names if re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None
+        )
+        if invalid:
+            raise RepoConfigError(
+                f"tools.secret_access.{tool_name} contains invalid environment names: "
+                f"{', '.join(invalid)}"
+            )
+    if "run_command" in secret_access:
+        raise RepoConfigError(
+            "run_command cannot receive secrets; use a fixed or integration tool"
+        )
+    return ToolPolicyConfig(
+        deny=deny,
+        phases=phases,
+        fixed_commands=commands,
+        secret_access=secret_access,
+    )
 
 
 def _parse_fixed_command(workspace: Path, raw_name: object, value: object) -> FixedCommandConfig:
     name = _nonempty_string(raw_name, "fixed command name")
+    if re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
+        raise RepoConfigError(
+            f"fixed command name must use lower-case letters, digits, and underscores: {name}"
+        )
     raw = _mapping(value, f"tools.fixed_commands.{name}")
     allowed = {"description", "argv", "cwd", "timeout", "phases", "parameters"}
     _reject_unknown(raw, allowed, f"tools.fixed_commands.{name}")
     argv = tuple(_string_list(raw.get("argv"), f"tools.fixed_commands.{name}.argv"))
     if not argv:
         raise RepoConfigError(f"tools.fixed_commands.{name}.argv must not be empty")
+    if argv[0].startswith("-"):
+        raise RepoConfigError(f"tools.fixed_commands.{name}.argv starts with an invalid command")
     cwd = _resolve(workspace, str(raw.get("cwd", ".")), f"tools.fixed_commands.{name}.cwd")
     if not cwd.is_dir():
         raise RepoConfigError(f"fixed command cwd does not exist: {cwd}")
@@ -357,9 +391,12 @@ def _parse_fixed_command(workspace: Path, raw_name: object, value: object) -> Fi
         parameter: _parse_command_parameter(name, parameter, parameter_raw)
         for parameter, parameter_raw in parameters_raw.items()
     }
+    description = raw.get("description", f"Run the configured {name} command.")
+    if not isinstance(description, str) or not description.strip():
+        raise RepoConfigError(f"tools.fixed_commands.{name}.description must be a string")
     return FixedCommandConfig(
         name=name,
-        description=str(raw.get("description") or f"Run the configured {name} command."),
+        description=description.strip(),
         argv=argv,
         cwd=cwd,
         timeout=timeout,
@@ -372,6 +409,8 @@ def _parse_command_parameter(
     command: str, raw_name: object, value: object
 ) -> CommandParameterConfig:
     name = _nonempty_string(raw_name, f"parameter name for {command}")
+    if re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
+        raise RepoConfigError(f"parameter name must use lower-case letters and underscores: {name}")
     raw = _mapping(value, f"tools.fixed_commands.{command}.parameters.{name}")
     _reject_unknown(raw, {"type", "flag", "choices", "required"}, f"parameter {command}.{name}")
     kind = str(raw.get("type", "string"))
@@ -385,8 +424,24 @@ def _parse_command_parameter(
         if flag_value is None
         else _nonempty_string(flag_value, f"parameter {command}.{name}.flag")
     )
+    if flag is not None and not flag.startswith("-"):
+        raise RepoConfigError(f"parameter {command}.{name}.flag must start with '-'")
     choices = tuple(_string_list(raw.get("choices", []), f"parameter {command}.{name}.choices"))
     required = _boolean(raw.get("required", False), f"parameter {command}.{name}.required")
+    if kind == "boolean" and flag is None:
+        raise RepoConfigError(f"boolean parameter {command}.{name} requires a flag")
+    if kind == "boolean" and choices:
+        raise RepoConfigError(f"boolean parameter {command}.{name} cannot declare choices")
+    if kind != "boolean" and not choices:
+        raise RepoConfigError(
+            f"parameter {command}.{name} requires bounded choices"
+        )
+    if kind == "integer" and any(
+        re.fullmatch(r"-?[0-9]+", choice) is None for choice in choices
+    ):
+        raise RepoConfigError(
+            f"integer parameter {command}.{name} choices must be integers"
+        )
     return CommandParameterConfig(type=kind, flag=flag, choices=choices, required=required)
 
 
@@ -424,6 +479,36 @@ def _parse_runtime(raw: dict[str, Any]) -> RuntimeSettings:
             maximum=100_000_000,
         ),
     )
+
+
+def _parse_publication(raw: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "required_checks",
+        "allowed_paths",
+        "denied_paths",
+        "max_files",
+        "max_changed_lines",
+        "commit_prefix",
+    }
+    _reject_unknown(raw, allowed, "publication")
+    result = dict(raw)
+    for name in ("required_checks", "allowed_paths", "denied_paths"):
+        if name in result:
+            result[name] = _string_list(result[name], f"publication.{name}")
+    for name in ("max_files", "max_changed_lines"):
+        if name in result:
+            result[name] = _integer(
+                result[name],
+                f"publication.{name}",
+                minimum=1,
+                maximum=10_000_000,
+            )
+    if "commit_prefix" in result:
+        result["commit_prefix"] = _nonempty_string(
+            result["commit_prefix"],
+            "publication.commit_prefix",
+        )
+    return result
 
 
 def _context_filenames(value: object) -> tuple[str, ...]:

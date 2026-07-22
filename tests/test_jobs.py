@@ -97,3 +97,59 @@ def test_queue_serializes_jobs_for_same_repository(tmp_path: Path) -> None:
     next_job = queue.claim("worker-b")
     assert next_job is not None
     assert next_job.id == second.id
+
+
+def test_expired_final_attempt_becomes_failed(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(_spec(), max_attempts=1)
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker", lease_seconds=1)
+    assert claimed is not None
+    claimed.lease_expires_at = time.time() - 1
+    store.save(claimed)
+
+    assert queue.claim("other-worker") is None
+    failed = store.load(created.id)
+    assert failed.status == JobStatus.FAILED
+    assert "lease expired" in failed.last_error
+
+
+def test_specific_claim_does_not_consume_another_job(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    first = store.create(_spec("First"))
+    second = store.create(
+        RunSpec(
+            task="Second",
+            repository=RepositorySpec("https://other.example/repo.git"),
+            workflow="fast",
+        )
+    )
+    queue.enqueue(first.id)
+    queue.enqueue(second.id)
+
+    claimed = queue.claim_job(second.id, "local-cli")
+
+    assert claimed is not None and claimed.id == second.id
+    assert store.load(first.id).status == JobStatus.QUEUED
+
+
+def test_expired_publication_lease_can_retry_idempotently(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(_spec(), max_attempts=2)
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker", lease_seconds=30)
+    assert claimed is not None
+    transition_job(claimed, JobStatus.PUBLISHING)
+    assert claimed.lease_owner == "worker"
+    claimed.lease_expires_at = time.time() - 1
+    store.save(claimed)
+
+    retried = queue.claim("retry-worker")
+
+    assert retried is not None
+    assert retried.id == claimed.id
+    assert retried.status == JobStatus.RUNNING
+    assert retried.attempt == 2

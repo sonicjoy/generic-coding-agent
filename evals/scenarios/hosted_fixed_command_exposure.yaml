@@ -1,0 +1,27 @@
+id: hosted_fixed_command_exposure
+description: Hosted mode hides raw shell while exposing an approved fixed command.
+task: Fix a typo in README
+config_yaml: |
+  version: 1
+  runtime:
+    profile: hosted
+  tools:
+    fixed_commands:
+      run_tests:
+        argv: [python, --version]
+        phases: [execute, implementation, review]
+scripts:
+  fast:
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Hosted tool policy verified.
+  strong: []
+expect:
+  status: completed
+  workflow: fast
+  tool_exposure:
+    - script: fast
+      call: 0
+      requires: [run_tests]
+      forbids: [run_command]

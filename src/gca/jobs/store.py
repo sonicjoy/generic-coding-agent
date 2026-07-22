@@ -111,8 +111,12 @@ class SqliteJobStore:
         except sqlite3.IntegrityError as exc:
             if idempotency_key is not None:
                 existing = self.find_by_idempotency(idempotency_key)
-                if existing is not None and existing.run_spec == spec:
-                    return existing
+                if existing is not None:
+                    if existing.run_spec == spec:
+                        return existing
+                    raise IdempotencyConflictError(
+                        "idempotency key is already associated with a different run"
+                    ) from exc
             raise JobStoreError(f"could not create job: {exc}") from exc
         return job
 
@@ -216,40 +220,41 @@ class SqliteJobStore:
             if row is None:
                 connection.commit()
                 return None
-            job = Job.from_dict(json.loads(str(row["data"])))
-            job.status = JobStatus.RUNNING
-            job.attempt += 1
-            job.lease_owner = worker_id
-            job.lease_expires_at = now + lease_seconds
-            job.updated_at = utc_now()
-            next_version = job.version + 1
-            payload = job.to_dict()
-            payload["version"] = next_version
-            cursor = connection.execute(
+            return self._claim_row(connection, row, worker_id, lease_seconds, now)
+
+    def claim(self, job_id: str, worker_id: str, *, lease_seconds: int = 300) -> Job | None:
+        """Atomically claim a specific due job when its repository is idle."""
+
+        if not worker_id.strip():
+            raise ValueError("worker_id must not be empty")
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
                 """
-                UPDATE jobs
-                SET status = ?, data = ?, version = ?, lease_owner = ?,
-                    lease_expires_at = ?, updated_at = ?
-                WHERE id = ? AND version = ? AND status = ?
+                SELECT queued.data FROM jobs AS queued
+                WHERE queued.id = ? AND queued.status = ? AND queued.not_before <= ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM jobs AS active
+                    WHERE active.repository_url = queued.repository_url
+                      AND active.id != queued.id
+                      AND active.status IN (?, ?)
+                  )
                 """,
                 (
-                    job.status.value,
-                    json.dumps(payload, sort_keys=True),
-                    next_version,
-                    job.lease_owner,
-                    job.lease_expires_at,
-                    job.updated_at,
-                    job.id,
-                    job.version,
+                    job_id,
                     JobStatus.QUEUED.value,
+                    now,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
                 ),
-            )
-            if cursor.rowcount != 1:
-                connection.rollback()
-                raise JobConcurrencyError(f"job was claimed concurrently: {job.id}")
-            connection.commit()
-            job.version = next_version
-            return job
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            return self._claim_row(connection, row, worker_id, lease_seconds, now)
 
     def requeue_expired(self) -> int:
         """Requeue jobs whose worker lease expired."""
@@ -260,14 +265,26 @@ class SqliteJobStore:
             rows = connection.execute(
                 """
                 SELECT data FROM jobs
-                WHERE status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
+                WHERE status IN (?, ?)
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= ?
                 """,
-                (JobStatus.RUNNING.value, now),
+                (
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
+                    now,
+                ),
             ).fetchall()
             count = 0
             for row in rows:
                 job = Job.from_dict(json.loads(str(row["data"])))
-                job.status = JobStatus.QUEUED
+                job.status = (
+                    JobStatus.QUEUED
+                    if job.attempt < job.max_attempts
+                    else JobStatus.FAILED
+                )
+                if job.status == JobStatus.FAILED:
+                    job.last_error = "worker lease expired after final attempt"
                 job.lease_owner = None
                 job.lease_expires_at = None
                 job.updated_at = utc_now()
@@ -298,10 +315,56 @@ class SqliteJobStore:
         """Extend a running job lease held by ``worker_id``."""
 
         job = self.load(job_id)
-        if job.status != JobStatus.RUNNING or job.lease_owner != worker_id:
-            raise JobConcurrencyError(f"worker does not hold running job lease: {job_id}")
+        if (
+            job.status not in {JobStatus.RUNNING, JobStatus.PUBLISHING}
+            or job.lease_owner != worker_id
+        ):
+            raise JobConcurrencyError(f"worker does not hold active job lease: {job_id}")
         job.lease_expires_at = time.time() + lease_seconds
         self.save(job)
+        return job
+
+    def _claim_row(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        worker_id: str,
+        lease_seconds: int,
+        now: float,
+    ) -> Job:
+        job = Job.from_dict(json.loads(str(row["data"])))
+        job.status = JobStatus.RUNNING
+        job.attempt += 1
+        job.lease_owner = worker_id
+        job.lease_expires_at = now + lease_seconds
+        job.updated_at = utc_now()
+        next_version = job.version + 1
+        payload = job.to_dict()
+        payload["version"] = next_version
+        cursor = connection.execute(
+            """
+            UPDATE jobs
+            SET status = ?, data = ?, version = ?, lease_owner = ?,
+                lease_expires_at = ?, updated_at = ?
+            WHERE id = ? AND version = ? AND status = ?
+            """,
+            (
+                job.status.value,
+                json.dumps(payload, sort_keys=True),
+                next_version,
+                job.lease_owner,
+                job.lease_expires_at,
+                job.updated_at,
+                job.id,
+                job.version,
+                JobStatus.QUEUED.value,
+            ),
+        )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise JobConcurrencyError(f"job was claimed concurrently: {job.id}")
+        connection.commit()
+        job.version = next_version
         return job
 
     def _initialize(self) -> None:
@@ -351,13 +414,37 @@ class SqliteJobStore:
 def _validate_run_spec(spec: RunSpec) -> None:
     if not spec.task.strip():
         raise ValueError("run task must not be empty")
+    if len(spec.task) > 50_000:
+        raise ValueError("run task must not exceed 50000 characters")
     if not spec.repository.url.strip():
         raise ValueError("repository URL must not be empty")
+    if len(spec.repository.url) > 2048:
+        raise ValueError("repository URL must not exceed 2048 characters")
     if not spec.repository.ref.strip():
         raise ValueError("repository ref must not be empty")
+    if len(spec.repository.ref) > 255:
+        raise ValueError("repository ref must not exceed 255 characters")
     if not 1 <= spec.repository.shallow_depth <= 1000:
         raise ValueError("repository shallow_depth must be from 1 to 1000")
     if spec.workflow is not None and spec.workflow not in WORKFLOWS:
         raise ValueError(f"workflow must be one of: {', '.join(sorted(WORKFLOWS))}")
     if spec.max_steps is not None and not 1 <= spec.max_steps <= 1000:
         raise ValueError("max_steps must be from 1 to 1000")
+    if spec.publication is not None:
+        if (
+            not spec.publication.provider.strip()
+            or len(spec.publication.provider) > 50
+        ):
+            raise ValueError("publication provider is invalid")
+        if (
+            not spec.publication.base_ref.strip()
+            or spec.publication.base_ref.startswith("-")
+            or len(spec.publication.base_ref) > 255
+        ):
+            raise ValueError("publication base_ref is invalid")
+        if len(spec.publication.branch_prefix) > 100:
+            raise ValueError("publication branch_prefix is too long")
+    if len(spec.labels) > 100 or any(
+        len(key) > 100 or len(value) > 1000 for key, value in spec.labels.items()
+    ):
+        raise ValueError("run labels exceed size limits")

@@ -32,7 +32,7 @@ def _repository(tmp_path: Path) -> Path:
 def test_worker_claims_and_completes_scripted_job(tmp_path: Path) -> None:
     settings = ServiceSettings(
         data_dir=tmp_path / "service",
-        api_token="token",
+        api_token="api-token-123456",
         allow_local_repositories=True,
         lease_seconds=60,
     )

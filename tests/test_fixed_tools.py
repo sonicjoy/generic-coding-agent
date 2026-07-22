@@ -56,3 +56,52 @@ def test_fixed_command_does_not_inherit_credentials(tmp_path: Path, monkeypatch:
     assert result.ok
     assert "missing" in result.output
     assert "super-secret-value" not in result.output
+
+
+def test_fixed_command_still_obeys_core_safety_rules(tmp_path: Path) -> None:
+    tool = FixedCommandTool(
+        FixedCommandConfig(
+            name="unsafe_delete",
+            description="Must be blocked.",
+            argv=("rm", "-rf", "."),
+            cwd=tmp_path,
+        )
+    )
+
+    result = tool.run(ToolContext(workspace=tmp_path))
+
+    assert not result.ok
+    assert "blocked by safety guardrail" in result.output
+
+
+def test_fixed_command_receives_only_explicitly_scoped_secret(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "database-value")  # type: ignore[attr-defined]
+    broker = CredentialBroker.from_environment(
+        os.environ,
+        include_names=frozenset({"DATABASE_URL"}),
+    )
+    tool = FixedCommandTool(
+        FixedCommandConfig(
+            name="check_database",
+            description="Check scoped environment.",
+            argv=(
+                sys.executable,
+                "-c",
+                "import os; print('present' if os.getenv('DATABASE_URL') else 'missing')",
+            ),
+            cwd=tmp_path,
+        )
+    )
+    context = ToolContext(
+        workspace=tmp_path,
+        credentials=broker,
+        tool_secret_access={"check_database": frozenset({"DATABASE_URL"})},
+    )
+
+    result = tool.run(context.for_tool("check_database"))
+
+    assert result.ok
+    assert "present" in result.output

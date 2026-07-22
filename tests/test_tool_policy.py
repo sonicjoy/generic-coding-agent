@@ -72,3 +72,23 @@ def test_unknown_tool_policy_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(ToolPolicyError, match="unavailable"):
         validate_tool_policy(build_registry(), config)
+
+
+def test_secret_access_references_registered_tool(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        "tools:\n  secret_access:\n    missing_integration: [SERVICE_TOKEN]\n",
+    )
+
+    with pytest.raises(ToolPolicyError, match="unavailable"):
+        validate_tool_policy(build_registry(), config)
+
+
+def test_manifest_cannot_escalate_planning_to_write_tools(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        "tools:\n  phases:\n    planning:\n      allow: [read_file, create_file]\n",
+    )
+
+    with pytest.raises(ToolPolicyError, match="elevated capabilities"):
+        tool_names_for_phase(build_registry(), config, "planning", workflow="feature")

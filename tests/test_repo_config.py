@@ -98,3 +98,32 @@ def test_rejects_unknown_and_unversioned_config(tmp_path: Path) -> None:
 def test_config_fingerprint_is_stable(tmp_path: Path) -> None:
     config = load_repo_config(tmp_path, [])
     assert config.fingerprint() == load_repo_config(tmp_path, []).fingerprint()
+
+
+def test_rejects_unknown_publication_configuration(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        "version: 1\npublication:\n  arbitrary_command: unsafe\n",
+    )
+
+    with pytest.raises(RepoConfigError, match="unknown keys in publication"):
+        load_repo_config(tmp_path, [path])
+
+
+def test_fixed_command_parameters_require_bounded_choices(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        """
+version: 1
+tools:
+  fixed_commands:
+    unsafe:
+      argv: [tool]
+      parameters:
+        arbitrary:
+          type: string
+""",
+    )
+
+    with pytest.raises(RepoConfigError, match="bounded choices"):
+        load_repo_config(tmp_path, [path])

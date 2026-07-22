@@ -17,6 +17,14 @@ class JobQueue(Protocol):
 
     def claim(self, worker_id: str, *, lease_seconds: int = 300) -> Job | None: ...
 
+    def claim_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 300,
+    ) -> Job | None: ...
+
     def ack(self, job: Job) -> None: ...
 
     def nack(
@@ -53,10 +61,22 @@ class SqliteJobQueue:
         self.store.requeue_expired()
         return self.store.claim_next(worker_id, lease_seconds=lease_seconds)
 
+    def claim_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 300,
+    ) -> Job | None:
+        """Claim one known job without consuming another queued job."""
+
+        self.store.requeue_expired()
+        return self.store.claim(job_id, worker_id, lease_seconds=lease_seconds)
+
     def ack(self, job: Job) -> None:
         """Persist a terminal or paused result and clear its lease."""
 
-        if job.status in {JobStatus.QUEUED, JobStatus.RUNNING}:
+        if job.status in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.PUBLISHING}:
             raise JobTransitionError(f"cannot acknowledge job in state {job.status.value}")
         job.lease_owner = None
         job.lease_expires_at = None

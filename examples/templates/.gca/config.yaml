@@ -30,10 +30,24 @@ runtime:
 
 tools:
   deny: []
-  fixed_commands:
-    run_tests:
-      description: Run the repository test suite.
-      argv: [python, -m, pytest]
-      cwd: .
-      timeout: 300
-      phases: [execute, implementation, review]
+
+# Add repository-specific commands as fixed argv tools. For example:
+#
+# tools:
+#   deny: []
+#   fixed_commands:
+#     run_tests:
+#       description: Run the repository test suite.
+#       argv: [your-test-command]
+#       cwd: .
+#       timeout: 300
+#       phases: [execute, implementation, review]
+
+# Service-owned publication can require fixed checks and bound the diff:
+#
+# publication:
+#   required_checks: [run_tests]
+#   allowed_paths: ["src/**", "tests/**", "README.md"]
+#   denied_paths: [".env", ".gca/.env"]
+#   max_files: 50
+#   max_changed_lines: 2000

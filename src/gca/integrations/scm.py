@@ -21,6 +21,10 @@ from gca.tools.fixed import FixedCommandTool
 class PublicationError(RuntimeError):
     """Raised when a completed job cannot be safely published."""
 
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
 
 @dataclass(frozen=True)
 class PublicationPolicy:
@@ -139,6 +143,7 @@ class PublicationController:
         self._run_required_checks(workspace, repo_config, policy)
 
         branch = _branch_name(target.branch_prefix, job.id)
+        _git(workspace, ["check-ref-format", "--branch", branch], self.credentials)
         base_ref = _existing_base_ref(workspace, target.base_ref, self.credentials)
         branch_exists = _git_ok(
             workspace,
@@ -210,6 +215,17 @@ class PublicationController:
         repo_config: RepoConfig,
         policy: PublicationPolicy,
     ) -> None:
+        configured_names = frozenset(
+            secret
+            for secrets in repo_config.tools.secret_access.values()
+            for secret in secrets
+        )
+        configured_broker = CredentialBroker.from_environment(
+            include_names=configured_names
+        )
+        broker = CredentialBroker(
+            {**self.credentials.secrets, **configured_broker.secrets}
+        )
         for name in policy.required_checks:
             command = repo_config.tools.fixed_commands.get(name)
             if command is None:
@@ -219,15 +235,16 @@ class PublicationController:
                 phase="publication",
                 audit_id="publication",
                 allowed_tools=frozenset({name}),
+                tool_secret_access=repo_config.tools.secret_access,
                 execution=ExecutionPolicy(
                     profile="hosted",
                     max_tool_timeout=repo_config.runtime.max_tool_timeout,
                     max_output_chars=repo_config.runtime.max_output_chars,
                     max_read_bytes=repo_config.runtime.max_read_bytes,
                 ),
-                credentials=self.credentials,
+                credentials=broker,
             )
-            result = FixedCommandTool(command).run(context)
+            result = FixedCommandTool(command).run(context.for_tool(name))
             if not result.ok:
                 raise PublicationError(f"required check {name!r} failed:\n{result.output}")
 

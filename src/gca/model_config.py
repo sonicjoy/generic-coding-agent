@@ -13,9 +13,11 @@ secret. Catalog files are merged in this order (later wins):
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -182,8 +184,17 @@ def _parse_provider(name: str, value: object, path: Path) -> ProviderSpec:
     api_key_env = raw.get("api_key_env")
     if not isinstance(base_url, str) or not base_url.strip():
         raise ModelConfigError(f"provider '{name}' in {path} requires base_url")
+    parsed_url = urlparse(base_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+        raise ModelConfigError(f"provider '{name}' base_url must be an HTTP(S) URL")
+    if parsed_url.username or parsed_url.password or parsed_url.query or parsed_url.fragment:
+        raise ModelConfigError(
+            f"provider '{name}' base_url must not contain credentials, query, or fragment"
+        )
     if not isinstance(api_key_env, str) or not api_key_env.strip():
         raise ModelConfigError(f"provider '{name}' in {path} requires api_key_env")
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", api_key_env) is None:
+        raise ModelConfigError(f"provider '{name}' api_key_env is not a valid environment name")
     timeout = raw.get("timeout", 180)
     if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
         raise ModelConfigError(f"provider '{name}' timeout must be a positive integer")
@@ -192,6 +203,17 @@ def _parse_provider(name: str, value: object, path: Path) -> ProviderSpec:
         isinstance(key, str) and isinstance(val, str) for key, val in headers_raw.items()
     ):
         raise ModelConfigError(f"provider '{name}' headers must be a string mapping")
+    sensitive_headers = {
+        str(key)
+        for key in headers_raw
+        if str(key).lower()
+        in {"api-key", "authorization", "cookie", "proxy-authorization", "x-api-key"}
+    }
+    if sensitive_headers:
+        raise ModelConfigError(
+            f"provider '{name}' headers contain secret-bearing names: "
+            f"{', '.join(sorted(sensitive_headers))}"
+        )
     return ProviderSpec(
         name=name,
         type=provider_type,

@@ -10,6 +10,7 @@ from gca.jobs.runner import JobRunner
 from gca.jobs.store import SqliteJobStore
 from gca.models import ModelProfile
 from gca.plugins import LoadedPlugins
+from gca.providers.base import ProviderError
 from gca.providers.scripted import ScriptedProvider
 
 
@@ -144,3 +145,34 @@ def test_job_runner_resumes_paused_session(tmp_path: Path) -> None:
 
     assert completed.status == JobStatus.COMPLETED, completed.last_error
     assert completed.session_id == paused.session_id
+
+
+def test_job_runner_requeues_retryable_provider_failure(tmp_path: Path) -> None:
+    source = _source_repository(tmp_path)
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(
+        RunSpec(
+            task="Fix a typo",
+            repository=RepositorySpec(url=str(source), ref="main"),
+            workflow="fast",
+        ),
+        max_attempts=2,
+    )
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker")
+    assert claimed is not None
+
+    def fail_models(config: object) -> LoadedPlugins:
+        raise ProviderError("rate limited", retryable=True)
+
+    result = JobRunner(
+        store=store,
+        workspace_root=tmp_path / "workspaces",
+        model_loader=fail_models,
+        allow_local_repositories=True,
+    ).execute(claimed)
+
+    assert result.status == JobStatus.QUEUED
+    assert "rate limited" in result.last_error
+    assert result.not_before > 0

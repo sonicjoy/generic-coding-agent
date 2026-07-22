@@ -8,6 +8,7 @@ from typing import Any
 
 from gca.repo_config import CommandParameterConfig, FixedCommandConfig
 from gca.tools.base import Tool, ToolContext, ToolResult
+from gca.tools.safety import check_command
 
 
 class FixedCommandTool(Tool):
@@ -36,20 +37,32 @@ class FixedCommandTool(Tool):
             if error is not None:
                 return ToolResult.failure(error)
 
+        rendered_command = shlex.join(argv)
+        blocked = check_command(
+            rendered_command,
+            hosted=ctx.execution.profile == "hosted",
+        )
+        if blocked is not None:
+            return ToolResult.failure(
+                f"blocked by safety guardrail ({blocked.rule}): {blocked.reason}"
+            )
         timeout = min(self.config.timeout, ctx.execution.max_tool_timeout)
+        environment = ctx.subprocess_env()
+        for name in ctx.allowed_secrets:
+            environment[name] = ctx.secret(name)
         try:
             proc = subprocess.run(
                 argv,
                 shell=False,
                 cwd=str(self.config.cwd),
-                env=ctx.subprocess_env(),
+                env=environment,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return ToolResult.failure(f"command timed out after {timeout}s: {shlex.join(argv)}")
+            return ToolResult.failure(f"command timed out after {timeout}s: {rendered_command}")
         except OSError as exc:
             return ToolResult.failure(f"could not execute {argv[0]!r}: {exc}")
 
@@ -57,7 +70,7 @@ class FixedCommandTool(Tool):
         output = ctx.redact(output)
         if len(output) > ctx.execution.max_output_chars:
             output = output[: ctx.execution.max_output_chars] + "\n... (output truncated)"
-        result = f"$ {shlex.join(argv)}\n(exit code: {proc.returncode})\n{output}"
+        result = f"$ {rendered_command}\n(exit code: {proc.returncode})\n{output}"
         return ToolResult.success(result) if proc.returncode == 0 else ToolResult.failure(result)
 
 
@@ -67,7 +80,11 @@ def _parameter_schema(parameters: dict[str, CommandParameterConfig]) -> dict[str
     for name, parameter in parameters.items():
         schema: dict[str, Any] = {"type": parameter.type}
         if parameter.choices:
-            schema["enum"] = list(parameter.choices)
+            schema["enum"] = (
+                [int(choice) for choice in parameter.choices]
+                if parameter.type == "integer"
+                else list(parameter.choices)
+            )
         properties[name] = schema
         if parameter.required:
             required.append(name)

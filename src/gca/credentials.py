@@ -42,13 +42,20 @@ class CredentialBroker:
     secrets: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_environment(cls, environ: Mapping[str, str] | None = None) -> CredentialBroker:
+    def from_environment(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        include_names: frozenset[str] = frozenset(),
+    ) -> CredentialBroker:
         """Capture sensitive values for redaction and authorized tool lookup."""
 
         source = dict(environ or os.environ)
         return cls(
             secrets={
-                name: value for name, value in source.items() if value and is_sensitive_name(name)
+                name: value
+                for name, value in source.items()
+                if value and (is_sensitive_name(name) or name in include_names)
             }
         )
 
@@ -74,7 +81,7 @@ class CredentialBroker:
         source = dict(environ or os.environ)
         safe: dict[str, str] = {}
         for name, value in source.items():
-            if is_sensitive_name(name):
+            if is_sensitive_name(name) or name in self.secrets:
                 continue
             if profile == "hosted" and name not in _HOSTED_SAFE_ENV and name not in allowed_keys:
                 continue

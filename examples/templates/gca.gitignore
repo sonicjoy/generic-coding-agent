@@ -1,0 +1,6 @@
+# Generic Coding Agent runtime state and secrets
+.env
+.gca/.env
+.gca/sessions/
+.gca/jobs/
+.gca-service/

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from gca.git_credentials import GitCredentials, git_credential_env
 from gca.jobs.models import RepositorySpec
 
 _SCP_STYLE = re.compile(r"^[A-Za-z0-9_.-]+@(?P<host>[A-Za-z0-9.-]+):(?P<path>.+)$")
@@ -17,6 +18,16 @@ class WorkspaceError(RuntimeError):
     """Raised when a repository workspace cannot be prepared."""
 
 
+def repository_host(url: str) -> str | None:
+    """Return a normalized host for HTTPS/SSH URLs, or ``None`` for local paths."""
+
+    parsed = urlparse(url)
+    if parsed.scheme in {"https", "ssh"}:
+        return parsed.hostname.lower() if parsed.hostname else None
+    match = _SCP_STYLE.fullmatch(url)
+    return match.group("host").lower() if match is not None else None
+
+
 def prepare_repository(
     spec: RepositorySpec,
     destination: Path,
@@ -24,6 +35,7 @@ def prepare_repository(
     allowed_hosts: frozenset[str] = frozenset(),
     allow_local: bool = False,
     env: Mapping[str, str] | None = None,
+    credentials: GitCredentials | None = None,
     timeout: int = 300,
 ) -> Path:
     """Clone ``spec`` using argv execution and return the checkout path."""
@@ -48,15 +60,17 @@ def prepare_repository(
         str(destination),
     ]
     try:
-        result = subprocess.run(
-            argv,
-            shell=False,
-            env=dict(env) if env is not None else None,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        base_env = dict(env) if env is not None else {}
+        with git_credential_env(base_env, credentials) as git_env:
+            result = subprocess.run(
+                argv,
+                shell=False,
+                env=git_env or None,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise WorkspaceError(f"repository clone failed: {exc}") from exc
     if result.returncode != 0:
@@ -83,11 +97,15 @@ def validate_repository_spec(
     parsed = urlparse(spec.url)
     host: str | None = None
     if parsed.scheme in {"https", "ssh"}:
+        if parsed.query or parsed.fragment:
+            raise WorkspaceError("repository URL must not contain query parameters or fragments")
         if parsed.password is not None or (
             parsed.scheme == "https" and parsed.username is not None
         ):
             raise WorkspaceError("repository URL must not contain credentials")
         host = parsed.hostname
+        if host is None or not parsed.path.strip("/"):
+            raise WorkspaceError("repository URL must include a host and path")
     elif parsed.scheme == "file":
         if not allow_local:
             raise WorkspaceError("local repository URLs are disabled")
@@ -98,10 +116,10 @@ def validate_repository_spec(
         ssh_match = _SCP_STYLE.fullmatch(spec.url)
         if ssh_match is not None:
             host = ssh_match.group("host")
-        elif allow_local and Path(spec.url).exists():
+        elif allow_local and Path(spec.url).is_absolute() and Path(spec.url).exists():
             host = None
         else:
-            raise WorkspaceError("repository must use HTTPS or SSH")
+            raise WorkspaceError("repository must use HTTPS, SSH, or an absolute local path")
     else:
         raise WorkspaceError(f"unsupported repository URL scheme: {parsed.scheme}")
     if allowed_hosts and (

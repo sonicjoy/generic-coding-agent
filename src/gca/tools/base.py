@@ -9,7 +9,7 @@ arguments matching the schema.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -44,16 +44,23 @@ class ToolContext:
     audit_id: str = ""
     allowed_tools: frozenset[str] | None = None
     allowed_secrets: frozenset[str] = frozenset()
+    tool_secret_access: dict[str, frozenset[str]] = field(default_factory=dict)
+    current_tool: str = ""
     execution: ExecutionPolicy = field(default_factory=ExecutionPolicy)
     credentials: CredentialBroker = field(default_factory=CredentialBroker.from_environment)
 
     def resolve(self, relative: str) -> Path:
         """Resolve ``relative`` under the workspace, rejecting path escapes."""
 
-        target = (self.workspace / relative).resolve()
+        requested = Path(relative)
+        target = (self.workspace / requested).resolve()
         root = self.workspace.resolve()
         if target != root and root not in target.parents:
             raise ToolError(f"path escapes workspace: {relative!r}")
+        if _is_protected_path(requested.parts) or (
+            target != root and _is_protected_path(target.relative_to(root).parts)
+        ):
+            raise ToolError(f"path is protected from agent tools: {relative!r}")
         return target
 
     def allows(self, tool_name: str) -> bool:
@@ -68,6 +75,15 @@ class ToolContext:
             return self.credentials.get(name, allowed=self.allowed_secrets)
         except (KeyError, PermissionError) as exc:
             raise ToolError(str(exc)) from exc
+
+    def for_tool(self, name: str) -> ToolContext:
+        """Return a context narrowed to one tool's declared secret access."""
+
+        return replace(
+            self,
+            current_tool=name,
+            allowed_secrets=self.tool_secret_access.get(name, frozenset()),
+        )
 
     def subprocess_env(self, *, allowed_keys: frozenset[str] = frozenset()) -> dict[str, str]:
         """Return a credential-sanitized subprocess environment."""
@@ -151,3 +167,18 @@ class ToolRegistry:
 
     def __contains__(self, name: object) -> bool:
         return name in self._tools
+
+
+def _is_protected_path(parts: tuple[str, ...]) -> bool:
+    normalized = tuple(part for part in parts if part not in {"", "."})
+    if ".git" in normalized:
+        return True
+    if len(normalized) >= 2 and normalized[:2] in {
+        (".gca", "sessions"),
+        (".gca", "jobs"),
+    }:
+        return True
+    return any(
+        part == ".env" or (part.startswith(".env.") and part != ".env.example")
+        for part in normalized
+    )

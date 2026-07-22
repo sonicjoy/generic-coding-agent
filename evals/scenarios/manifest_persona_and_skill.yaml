@@ -1,0 +1,44 @@
+id: manifest_persona_and_skill
+description: Manifest persona and non-default skill directory reach the model lazily.
+task: Fix a typo in README
+agents_md: |
+  ---
+  gca:
+    workflow: fast
+  ---
+  Follow the repository rulebook.
+config_yaml: |
+  version: 1
+  context:
+    persona_file: agent/persona.md
+  skills:
+    dirs: [playbooks]
+initial_files:
+  agent/persona.md: |
+    Custom portable persona.
+  playbooks/pipeline-debugging/SKILL.md: |
+    ---
+    name: pipeline-debugging
+    description: Diagnose pipeline failures.
+    ---
+    Inspect logs before changing code.
+scripts:
+  fast:
+    - tool_calls:
+        - name: load_skill
+          arguments:
+            name: pipeline-debugging
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Loaded the repository playbook.
+  strong: []
+expect:
+  status: completed
+  workflow: fast
+  system_contains:
+    - Custom portable persona.
+    - "pipeline-debugging: Diagnose pipeline failures."
+    - Follow the repository rulebook.
+  system_excludes:
+    - "gca:"

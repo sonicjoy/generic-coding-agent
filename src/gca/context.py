@@ -43,8 +43,11 @@ def discover_context_files(
             continue
         if any(part in IGNORED_DIRS for part in path.relative_to(workspace).parts):
             continue
+        resolved = path.resolve()
+        if resolved != workspace and workspace not in resolved.parents:
+            continue
         try:
-            content = path.read_text(encoding="utf-8")
+            content = resolved.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
         found.append(ContextFile(path=path, content=content))

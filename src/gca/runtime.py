@@ -16,7 +16,11 @@ from gca.providers.base import LLMProvider, Message
 from gca.repo_config import RepoConfig, load_repo_config
 from gca.session import Session, SessionStore
 from gca.skills import LoadSkillTool, SkillRegistry
-from gca.tool_policy import register_fixed_commands, tool_names_for_phase, validate_tool_policy
+from gca.tool_policy import (
+    register_fixed_commands,
+    tool_names_for_phase,
+    validate_all_phase_policies,
+)
 from gca.tools import build_registry
 from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
 
@@ -47,6 +51,7 @@ class RuntimeConfig:
     workflow: str | None = None
     models_paths: list[Path] | None = None
     repo_config: RepoConfig | None = None
+    trusted_model_paths_only: bool = False
 
 
 def default_skill_dirs(workspace: Path) -> list[Path]:
@@ -98,7 +103,7 @@ def build_registry_with_extras(
             load_configured_plugins(config).register_tools(registry)
     repo_config = config.repo_config or load_repo_config(config.workspace)
     register_fixed_commands(registry, repo_config)
-    validate_tool_policy(registry, repo_config)
+    validate_all_phase_policies(registry, repo_config)
     return registry
 
 
@@ -145,10 +150,13 @@ def create_agent(
         session.messages.append(Message(role="user", content=session.task))
 
     allowed = tool_names_for_phase(registry, repo_config, "execute", workflow="fast")
-    credentials = CredentialBroker.from_environment()
+    credentials = CredentialBroker.from_environment(
+        include_names=_configured_secret_names(repo_config)
+    )
     context = ToolContext(
         workspace=config.workspace,
         allowed_tools=allowed,
+        tool_secret_access=repo_config.tools.secret_access,
         execution=_execution_policy(repo_config),
         credentials=credentials,
     )
@@ -193,7 +201,9 @@ def create_coordinator(
         config_fingerprint=repo_config.fingerprint(),
         repo_config=repo_config,
         execution_policy=_execution_policy(repo_config),
-        credentials=CredentialBroker.from_environment(),
+        credentials=CredentialBroker.from_environment(
+            include_names=_configured_secret_names(repo_config)
+        ),
         on_event=on_event,
     )
 
@@ -204,6 +214,14 @@ def _execution_policy(config: RepoConfig) -> ExecutionPolicy:
         max_tool_timeout=config.runtime.max_tool_timeout,
         max_output_chars=config.runtime.max_output_chars,
         max_read_bytes=config.runtime.max_read_bytes,
+    )
+
+
+def _configured_secret_names(config: RepoConfig) -> frozenset[str]:
+    return frozenset(
+        name
+        for secret_names in config.tools.secret_access.values()
+        for name in secret_names
     )
 
 

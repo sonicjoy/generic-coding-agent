@@ -5,11 +5,13 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
+from gca.git_credentials import GitCredentials
 from gca.integrations.github import GitHubScmAdapter
 from gca.integrations.gitlab import GitLabScmAdapter
 from gca.integrations.scm import PublicationController, ScmAdapter
-from gca.jobs.models import Job
+from gca.jobs.models import Job, RepositorySpec
 from gca.jobs.runner import JobRunner, RuntimeModelLoader
+from gca.workspace.prepare import repository_host
 from gca_service.state import ServiceState
 
 EventSink = Callable[[str], None]
@@ -49,6 +51,14 @@ class ServiceWorker:
             active.version = renewed.version
             active.lease_expires_at = renewed.lease_expires_at
 
+        def clone_credentials(repository: RepositorySpec) -> GitCredentials | None:
+            host = repository_host(repository.url)
+            if host == settings.github_host and settings.github_token:
+                return GitCredentials("x-access-token", settings.github_token)
+            if host == settings.gitlab_host and settings.gitlab_token:
+                return GitCredentials("oauth2", settings.gitlab_token)
+            return None
+
         runner = JobRunner(
             store=self.state.store,
             workspace_root=settings.workspace_root,
@@ -57,8 +67,11 @@ class ServiceWorker:
             allowed_repository_hosts=settings.allowed_repository_hosts,
             allow_local_repositories=settings.allow_local_repositories,
             hosted_mode=True,
+            plugin_dir=settings.plugin_dir,
+            model_paths=list(settings.model_paths) or None,
             on_event=self.on_event,
             lease_heartbeat=heartbeat,
+            repository_credentials=clone_credentials,
         )
         return runner.execute(job)
 

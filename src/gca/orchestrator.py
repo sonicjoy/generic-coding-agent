@@ -398,6 +398,7 @@ class RunCoordinator:
             phase=phase,
             audit_id=phase,
             allowed_tools=frozenset(registry.names()),
+            tool_secret_access=self.repo_config.tools.secret_access,
             execution=self.execution_policy,
             credentials=self.credentials,
         )
