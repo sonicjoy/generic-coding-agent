@@ -81,7 +81,9 @@ def _validate_repository(
     parsed = urlparse(spec.url)
     host: str | None = None
     if parsed.scheme in {"https", "ssh"}:
-        if parsed.password is not None or (parsed.scheme == "https" and parsed.username is not None):
+        if parsed.password is not None or (
+            parsed.scheme == "https" and parsed.username is not None
+        ):
             raise WorkspaceError("repository URL must not contain credentials")
         host = parsed.hostname
     elif parsed.scheme == "file":
@@ -100,5 +102,7 @@ def _validate_repository(
             raise WorkspaceError("repository must use HTTPS or SSH")
     else:
         raise WorkspaceError(f"unsupported repository URL scheme: {parsed.scheme}")
-    if allowed_hosts and (host is None or host.lower() not in {item.lower() for item in allowed_hosts}):
+    if allowed_hosts and (
+        host is None or host.lower() not in {item.lower() for item in allowed_hosts}
+    ):
         raise WorkspaceError(f"repository host is not allowed: {host or '(local)'}")

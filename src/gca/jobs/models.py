@@ -148,17 +148,13 @@ class Job:
             id=str(data["id"]),
             status=JobStatus(str(data.get("status", JobStatus.QUEUED.value))),
             idempotency_key=(
-                str(data["idempotency_key"])
-                if data.get("idempotency_key") is not None
-                else None
+                str(data["idempotency_key"]) if data.get("idempotency_key") is not None else None
             ),
             attempt=int(data.get("attempt", 0)),
             max_attempts=int(data.get("max_attempts", 3)),
             run_spec=RunSpec.from_dict(dict(data["run_spec"])),
             session_id=(str(data["session_id"]) if data.get("session_id") else None),
-            workspace_path=(
-                str(data["workspace_path"]) if data.get("workspace_path") else None
-            ),
+            workspace_path=(str(data["workspace_path"]) if data.get("workspace_path") else None),
             publication=dict(data.get("publication", {})),
             last_error=str(data.get("last_error", "")),
             lease_owner=(str(data["lease_owner"]) if data.get("lease_owner") else None),

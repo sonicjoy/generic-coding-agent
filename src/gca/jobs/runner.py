@@ -11,7 +11,7 @@ from typing import Protocol
 from gca.agent import AgentResult, EventHook
 from gca.credentials import CredentialBroker
 from gca.jobs.lifecycle import can_retry, retry_delay_seconds, transition_job
-from gca.jobs.models import Job, JobStatus, RunSpec
+from gca.jobs.models import Job, JobStatus
 from gca.jobs.store import JobStore
 from gca.model_loading import load_runtime_models
 from gca.plugins import LoadedPlugins

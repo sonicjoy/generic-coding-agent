@@ -43,11 +43,14 @@ def test_prepare_repository_clones_local_fixture_when_explicitly_allowed(
     )
 
     assert (checkout / "README.md").read_text(encoding="utf-8") == "fixture\n"
-    assert prepare_repository(
-        RepositorySpec(url=str(source), ref="main"),
-        checkout,
-        allow_local=True,
-    ) == checkout
+    assert (
+        prepare_repository(
+            RepositorySpec(url=str(source), ref="main"),
+            checkout,
+            allow_local=True,
+        )
+        == checkout
+    )
 
 
 def test_prepare_repository_rejects_local_and_credential_urls(tmp_path: Path) -> None:
