@@ -50,9 +50,15 @@ pip install -e ".[dev]"
 For day-to-day use against other repos, ``pip install -e .`` (without ``[dev]``)
 is enough.
 
-## Quick start in your project
+## Quick start (mmmapper)
 
-Use these steps to point `gca` at any repo you want the agent to improve.
+Use these steps to point `gca` at the **mmmapper** repo. The same flow works
+for any other project — swap the workspace path.
+
+Ready-to-copy templates live under ``examples/templates/``:
+
+- ``examples/templates/AGENTS.md``
+- ``examples/templates/models.yaml``
 
 ### 1. Install the harness
 
@@ -66,30 +72,33 @@ gca --help
 
 Keep this environment activated (or install into a tooling venv on your `PATH`).
 
-### 2. Enter your project
+### 2. Enter mmmapper
 
 ```bash
-cd /path/to/your-project
+cd /path/to/mmmapper
 ```
 
 `--workspace` defaults to the current directory.
 
-### 3. Add `models.yaml`
+### 3. Copy the templates
 
 ```bash
-cp /path/to/generic-coding-agent/examples/models.yaml ./models.yaml
+GCA=/path/to/generic-coding-agent
+cp "$GCA/examples/templates/models.yaml" ./models.yaml
+cp "$GCA/examples/templates/AGENTS.md" ./AGENTS.md
 ```
 
-Edit model IDs and strength/speed/cost scores as needed. Catalog search order
-(later overrides earlier):
+Edit model IDs / scores in `models.yaml` and mmmapper-specific conventions in
+`AGENTS.md` as needed. Catalog search order (later overrides earlier):
 
 1. `~/.gca/models.yaml`
 2. `<project>/models.yaml`
 3. `<project>/.gca/models.yaml`
 4. `--models <path>` (repeatable)
 
-Never put API keys in this file — only the env var *name* (for example
-`api_key_env: OPENROUTER_API_KEY`).
+Never put API keys in `models.yaml` — only the env var *name* (for example
+`api_key_env: OPENROUTER_API_KEY`). Model names under `gca.models` in
+`AGENTS.md` must match names registered in `models.yaml`.
 
 ### 4. Set the API key
 
@@ -101,36 +110,10 @@ chmod 600 .env
 Also supported: `~/.gca/.env`, `<project>/.gca/.env`, or a normal shell
 `export`. Keep `.env` out of git.
 
-### 5. Add project instructions (`AGENTS.md`)
-
-Create `AGENTS.md` at the project root. Optional YAML frontmatter configures
-routing; the Markdown body is injected into every agent's system prompt.
-
-```yaml
----
-gca:
-  workflow: auto
-  models:
-    fast: gpt-5.6-luna
-    planning: claude-opus-4.8
-    implementation: gpt-5.6-luna
-    review: claude-fable-5
-  max_review_cycles: 2
----
-
-# Project agent guidance
-
-- Prefer small, targeted diffs via apply_patch.
-- Run the project's tests/linters before finishing.
-- Do not change unrelated files.
-```
-
-Model names under `gca.models` must match names registered in `models.yaml`.
-
-### 6. (Optional) Add skills
+### 5. (Optional) Add skills
 
 ```text
-your-project/
+mmmapper/
   skills/
     my-workflow/
       SKILL.md
@@ -139,11 +122,11 @@ your-project/
 Skills are discovered from `skills/` and `.gca/skills/`, or from extra
 `--skills` directories.
 
-### 7. Run a task
+### 6. Run a task
 
 ```bash
 . /path/to/generic-coding-agent/.venv/bin/activate
-cd /path/to/your-project
+cd /path/to/mmmapper
 
 gca run "Fix the flaky login test"
 gca run "Fix a typo in README" --workflow fast
@@ -155,7 +138,7 @@ gca run "Refactor auth middleware" --max-steps 40
 - Feature/large changes use planner → implementer → reviewer (`feature`).
 - Sessions are stored under `.gca/sessions/` (gitignored).
 
-### 8. List and resume sessions
+### 7. List and resume sessions
 
 ```bash
 gca sessions
@@ -170,12 +153,12 @@ gca resume <session_id>
 | `AGENTS.md` | `.gca/sessions/` |
 | `skills/**` | API keys |
 
-Suggested project layout:
+Suggested mmmapper layout after setup:
 
 ```text
-your-project/
-  AGENTS.md
-  models.yaml
+mmmapper/
+  AGENTS.md            # copied from examples/templates/
+  models.yaml          # copied from examples/templates/
   .env                 # local only
   skills/              # optional
   .gca/sessions/       # runtime, ignored
@@ -187,7 +170,7 @@ your-project/
 #!/usr/bin/env bash
 set -euo pipefail
 . /opt/gca/.venv/bin/activate
-cd /srv/repos/my-app
+cd /srv/repos/mmmapper
 set -a; . ./.env; set +a
 gca run "Pick up the next failing CI issue and fix it" \
   --workflow auto \
@@ -242,7 +225,8 @@ export OPENROUTER_API_KEY=...
 gca run "Fix a typo in README" --workspace .
 ```
 
-See ``examples/models.yaml`` for a fuller OpenRouter catalog.
+See ``examples/templates/models.yaml`` (or ``examples/models.yaml``) for a
+fuller OpenRouter catalog.
 
 ### Optional plugins
 

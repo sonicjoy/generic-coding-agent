@@ -1,7 +1,7 @@
-# Example declarative model catalog.
-# Prefer the ready-to-copy pair under examples/templates/ for project setup
-# (AGENTS.md + models.yaml). You can also copy this file alone to models.yaml
-# (project) or ~/.gca/models.yaml (user).
+# Ready-to-copy model catalog for project workspaces (e.g. mmmapper).
+# Copy next to AGENTS.md at the repo root:
+#   cp /path/to/generic-coding-agent/examples/templates/models.yaml /path/to/mmmapper/
+#
 # API keys stay in environment variables / .env files — never in this file.
 
 providers:
