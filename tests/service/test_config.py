@@ -43,3 +43,14 @@ def test_webhook_secret_requires_project_allowlist() -> None:
                 "GCA_GITHUB_WEBHOOK_SECRET": "webhook-secret-123456",
             }
         )
+
+
+def test_service_owned_tokens_cannot_be_granted_to_repository_tools() -> None:
+    with pytest.raises(ServiceConfigError, match="service-owned secrets"):
+        ServiceSettings.from_environment(
+            {
+                "GCA_API_TOKEN": "api-token-123456",
+                "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+                "GCA_ALLOWED_TOOL_SECRETS": "GCA_GITHUB_TOKEN",
+            }
+        )

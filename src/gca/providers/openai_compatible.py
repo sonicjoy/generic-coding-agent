@@ -27,6 +27,25 @@ from gca.providers.base import (
 _MAX_RESPONSE_BYTES = 10_000_000
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def _open_url(request: urllib.request.Request, timeout: int) -> Any:
+    """Open a provider request without forwarding credentials through redirects."""
+
+    return urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout)
+
+
 class OpenAICompatibleProvider(LLMProvider):
     """HTTP provider for OpenAI-compatible ``/chat/completions`` endpoints."""
 
@@ -88,7 +107,7 @@ class OpenAICompatibleProvider(LLMProvider):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with _open_url(request, self.timeout) as response:
                 raw = response.read(_MAX_RESPONSE_BYTES + 1)
                 if len(raw) > _MAX_RESPONSE_BYTES:
                     raise ProviderError("LLM response exceeded 10 MB")

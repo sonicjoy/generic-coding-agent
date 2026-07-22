@@ -25,7 +25,10 @@ class RecordingAdapter:
         self.branches: list[str] = []
         self.requests: list[ChangeRequest] = []
 
-    def push(self, workspace: Path, branch: str) -> None:
+    def supports_repository(self, repository_url: str) -> bool:
+        return True
+
+    def push(self, workspace: Path, branch: str, repository_url: str) -> None:
         self.branches.append(branch)
 
     def open_change_request(self, request: ChangeRequest) -> str:

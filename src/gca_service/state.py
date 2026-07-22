@@ -32,7 +32,7 @@ class ServiceState:
             store=store,
             queue=SqliteJobQueue(store),
             normalizers={
-                "github": GitHubWebhookNormalizer(),
-                "gitlab": GitLabWebhookNormalizer(),
+                "github": GitHubWebhookNormalizer(trigger_label=settings.github_trigger_label),
+                "gitlab": GitLabWebhookNormalizer(trigger_label=settings.gitlab_trigger_label),
             },
         )

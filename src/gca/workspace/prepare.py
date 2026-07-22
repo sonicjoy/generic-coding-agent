@@ -49,6 +49,10 @@ def prepare_repository(
     destination.parent.mkdir(parents=True, exist_ok=True)
     argv = [
         "git",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "http.followRedirects=false",
         "clone",
         "--depth",
         str(spec.shallow_depth),

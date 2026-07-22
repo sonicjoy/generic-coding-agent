@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import io
 import urllib.error
-import urllib.request
 
 import pytest
 
+from gca.providers import openai_compatible
 from gca.providers.base import ProviderError
 from gca.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -27,7 +27,7 @@ def test_http_provider_classifies_retryable_statuses(
             io.BytesIO(b"provider error"),
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", fail)  # type: ignore[attr-defined]
+    monkeypatch.setattr(openai_compatible, "_open_url", fail)  # type: ignore[attr-defined]
     provider = OpenAICompatibleProvider(
         model_id="model",
         base_url="https://example.test/v1",

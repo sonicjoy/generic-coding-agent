@@ -61,6 +61,10 @@ class ToolContext:
             target != root and _is_protected_path(target.relative_to(root).parts)
         ):
             raise ToolError(f"path is protected from agent tools: {relative!r}")
+        if self.execution.profile == "hosted" and target != root:
+            normalized = target.relative_to(root).parts
+            if normalized == (".gca", "config.yaml"):
+                raise ToolError("hosted repository policy is immutable during a run")
         return target
 
     def allows(self, tool_name: str) -> bool:

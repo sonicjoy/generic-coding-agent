@@ -310,6 +310,16 @@ gca run "Fix a typo in README" --workspace .
 See ``examples/templates/models.yaml`` (or ``examples/models.yaml``) for a
 fuller OpenRouter catalog.
 
+Local runs treat workspace model catalogs as trusted repository configuration.
+When inspecting an untrusted checkout, ignore its catalogs and provider secret
+selectors:
+
+```bash
+gca run "Inspect this repository" \
+  --trusted-models-only \
+  --models /path/to/operator-owned-models.yaml
+```
+
 ### Optional plugins
 
 - ``get_models()`` / ``get_provider()`` can still register models; plugin names
@@ -435,8 +445,10 @@ curl -X POST http://localhost:8000/runs \
 GitHub webhooks require `GCA_GITHUB_WEBHOOK_SECRET` and an explicit
 `GCA_ALLOWED_GITHUB_PROJECTS=owner/repo,...` allowlist. GitLab uses
 `GCA_GITLAB_WEBHOOK_SECRET` and `GCA_ALLOWED_GITLAB_PROJECTS=group/repo,...`.
-The service verifies every delivery before normalization and deduplicates it by
-provider delivery ID.
+The service verifies every delivery before normalization and deduplicates its
+authenticated body even if a replay uses a new delivery ID. Issues enqueue only
+when a maintainer applies the `gca-run` label; customize it with
+`GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL`.
 
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
 `GCA_GITLAB_TOKEN`. These tokens also provide temporary askpass credentials for
@@ -464,10 +476,15 @@ Hosted jobs never import Python plugins from the cloned repository; pass an
 operator-installed `GCA_PLUGIN_DIR` instead. They also ignore checkout-local
 model catalogs and use `~/.gca/models.yaml` plus operator-owned
 `GCA_MODEL_CONFIG_PATHS`; this prevents a repository from selecting a service
-secret as its provider key. The built-in controls are not an OS sandbox: deploy
-workers in isolated containers with filesystem, resource, and network-egress
-limits. Monitoring/anomaly detection stays outside core and can create an SCM
-issue or call `POST /runs`.
+secret as its provider key. Repository tool secret requests are denied unless
+the environment name is explicitly listed in `GCA_ALLOWED_TOOL_SECRETS`; API,
+webhook, and SCM tokens should never be listed. Publication uses the immutable
+manifest snapshot loaded before the agent runs.
+
+The built-in controls are not an OS sandbox: deploy workers in isolated
+containers with filesystem, resource, and network-egress limits. Monitoring /
+anomaly detection stays outside core and can create an SCM issue or call
+`POST /runs`.
 
 ## Usage
 

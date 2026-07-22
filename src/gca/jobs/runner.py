@@ -19,7 +19,7 @@ from gca.jobs.store import JobStore
 from gca.model_loading import load_runtime_models
 from gca.plugins import LoadedPlugins
 from gca.providers.base import ProviderError
-from gca.repo_config import load_repo_config
+from gca.repo_config import RepoConfig, load_repo_config
 from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, SessionStore
 from gca.workspace.layout import JobWorkspace
@@ -29,7 +29,12 @@ from gca.workspace.prepare import WorkspaceError, prepare_repository
 class Publisher(Protocol):
     """Service-owned publication hook called only after successful agent completion."""
 
-    def publish(self, job: Job, workspace: Path) -> dict[str, object]: ...
+    def publish(
+        self,
+        job: Job,
+        workspace: Path,
+        repo_config: RepoConfig,
+    ) -> dict[str, object]: ...
 
 
 RuntimeModelLoader = Callable[[RuntimeConfig], LoadedPlugins]
@@ -56,6 +61,7 @@ class JobRunner:
         on_event: EventHook | None = None,
         lease_heartbeat: LeaseHeartbeat | None = None,
         repository_credentials: RepositoryCredentialResolver | None = None,
+        allowed_tool_secrets: frozenset[str] = frozenset(),
     ) -> None:
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
@@ -70,6 +76,7 @@ class JobRunner:
         self.on_event = on_event
         self.lease_heartbeat = lease_heartbeat
         self.repository_credentials = repository_credentials
+        self.allowed_tool_secrets = allowed_tool_secrets
         self.credentials = CredentialBroker.from_environment()
 
     def execute(self, job: Job) -> Job:
@@ -99,18 +106,28 @@ class JobRunner:
             job.workspace_path = str(repository)
             self.store.save(job)
             self._heartbeat(job)
-            result = self._run_agent(job, layout)
-            self._apply_result(job, result, repository)
+            result, repo_config = self._run_agent(job, layout)
+            self._heartbeat(job)
+            self._apply_result(job, result, repository, repo_config)
         except Exception as exc:
             self._handle_failure(job, exc)
         return job
 
-    def _run_agent(self, job: Job, layout: JobWorkspace) -> AgentResult:
+    def _run_agent(self, job: Job, layout: JobWorkspace) -> tuple[AgentResult, RepoConfig]:
         repo_config = load_repo_config(layout.repository)
         if self.hosted_mode and repo_config.runtime.profile != "hosted":
             repo_config = replace(
                 repo_config,
                 runtime=replace(repo_config.runtime, profile="hosted"),
+            )
+        configured_secrets = {
+            name for names in repo_config.tools.secret_access.values() for name in names
+        }
+        unauthorized_secrets = sorted(configured_secrets - self.allowed_tool_secrets)
+        if self.hosted_mode and unauthorized_secrets:
+            raise ValueError(
+                "hosted repository requested unapproved tool secrets: "
+                + ", ".join(unauthorized_secrets)
             )
         max_steps = job.run_spec.max_steps or repo_config.runtime.max_steps
         runtime = RuntimeConfig(
@@ -142,9 +159,15 @@ class JobRunner:
             loaded_plugins=loaded,
             on_event=lambda message: self._on_agent_event(job, message),
         )
-        return coordinator.run(session, sessions)
+        return coordinator.run(session, sessions), repo_config
 
-    def _apply_result(self, job: Job, result: AgentResult, repository: Path) -> None:
+    def _apply_result(
+        self,
+        job: Job,
+        result: AgentResult,
+        repository: Path,
+        repo_config: RepoConfig,
+    ) -> None:
         job.result_summary = self.credentials.redact(result.final_message)
         if result.status == STATUS_PAUSED:
             transition_job(job, JobStatus.PAUSED, error=result.final_message)
@@ -170,7 +193,8 @@ class JobRunner:
             return
         transition_job(job, JobStatus.PUBLISHING)
         self.store.save(job)
-        job.publication = dict(self.publisher.publish(job, repository))
+        self._heartbeat(job)
+        job.publication = dict(self.publisher.publish(job, repository, repo_config))
         transition_job(job, JobStatus.COMPLETED)
         self.store.save(job)
 

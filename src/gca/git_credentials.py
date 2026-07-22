@@ -13,6 +13,9 @@ import os
 import sys
 
 prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+expected_host = os.environ.get("GCA_GIT_HOST", "")
+if expected_host and expected_host.lower() not in prompt.lower():
+    raise SystemExit("credential prompt host mismatch")
 name = "GCA_GIT_USERNAME" if "username" in prompt.lower() else "GCA_GIT_TOKEN"
 print(os.environ[name])
 """
@@ -24,6 +27,7 @@ class GitCredentials:
 
     username: str
     token: str
+    host: str
 
 
 @contextmanager
@@ -48,6 +52,7 @@ def git_credential_env(
                 "GIT_TERMINAL_PROMPT": "0",
                 "GCA_GIT_USERNAME": credentials.username,
                 "GCA_GIT_TOKEN": credentials.token,
+                "GCA_GIT_HOST": credentials.host,
             }
         )
         yield environment

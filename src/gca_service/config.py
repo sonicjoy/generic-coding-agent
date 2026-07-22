@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +31,8 @@ class ServiceSettings:
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     github_host: str = "github.com"
     gitlab_host: str = "gitlab.com"
+    github_trigger_label: str = "gca-run"
+    gitlab_trigger_label: str = "gca-run"
     lease_seconds: int = 1800
     poll_seconds: float = 2.0
     worker_id: str = field(default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}")
@@ -37,6 +40,7 @@ class ServiceSettings:
     max_request_bytes: int = 1_000_000
     model_paths: tuple[Path, ...] = ()
     plugin_dir: Path | None = None
+    allowed_tool_secrets: frozenset[str] = frozenset()
 
     @property
     def database_path(self) -> Path:
@@ -71,6 +75,8 @@ class ServiceSettings:
             gitlab_api_url=values.get("GCA_GITLAB_API_URL", "https://gitlab.com/api/v4"),
             github_host=values.get("GCA_GITHUB_HOST", "github.com").lower(),
             gitlab_host=values.get("GCA_GITLAB_HOST", "gitlab.com").lower(),
+            github_trigger_label=values.get("GCA_GITHUB_TRIGGER_LABEL", "gca-run"),
+            gitlab_trigger_label=values.get("GCA_GITLAB_TRIGGER_LABEL", "gca-run"),
             lease_seconds=_integer(values.get("GCA_LEASE_SECONDS", "1800"), "GCA_LEASE_SECONDS"),
             poll_seconds=_positive_float(
                 values.get("GCA_POLL_SECONDS", "2"),
@@ -90,6 +96,7 @@ class ServiceSettings:
             plugin_dir=(
                 Path(values["GCA_PLUGIN_DIR"]).resolve() if values.get("GCA_PLUGIN_DIR") else None
             ),
+            allowed_tool_secrets=_csv(values.get("GCA_ALLOWED_TOOL_SECRETS", "")),
         )
         settings.validate()
         return settings
@@ -123,6 +130,8 @@ class ServiceSettings:
             raise ServiceConfigError("max_request_bytes must be positive")
         if not self.github_host or not self.gitlab_host:
             raise ServiceConfigError("SCM host names must not be empty")
+        if not self.github_trigger_label.strip() or not self.gitlab_trigger_label.strip():
+            raise ServiceConfigError("SCM trigger labels must not be empty")
         _validate_api_url(self.github_api_url, "github_api_url")
         _validate_api_url(self.gitlab_api_url, "gitlab_api_url")
         missing_models = [str(path) for path in self.model_paths if not path.is_file()]
@@ -132,6 +141,26 @@ class ServiceSettings:
             )
         if self.plugin_dir is not None and not self.plugin_dir.is_dir():
             raise ServiceConfigError(f"plugin directory does not exist: {self.plugin_dir}")
+        invalid_secrets = sorted(
+            name
+            for name in self.allowed_tool_secrets
+            if re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None
+        )
+        if invalid_secrets:
+            raise ServiceConfigError(
+                f"invalid allowed tool secret names: {', '.join(invalid_secrets)}"
+            )
+        reserved = {
+            "GCA_API_TOKEN",
+            "GCA_GITHUB_TOKEN",
+            "GCA_GITHUB_WEBHOOK_SECRET",
+            "GCA_GITLAB_TOKEN",
+            "GCA_GITLAB_WEBHOOK_SECRET",
+        } & set(self.allowed_tool_secrets)
+        if reserved:
+            raise ServiceConfigError(
+                f"service-owned secrets cannot be granted to tools: {', '.join(sorted(reserved))}"
+            )
 
 
 def _csv(value: str) -> frozenset[str]:

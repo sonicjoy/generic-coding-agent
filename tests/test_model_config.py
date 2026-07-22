@@ -157,7 +157,7 @@ def test_openai_compatible_parses_tool_calls(
         return FakeResponse()
 
     monkeypatch.setenv("TEST_API_KEY", "secret")
-    monkeypatch.setattr("gca.providers.openai_compatible.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("gca.providers.openai_compatible._open_url", fake_urlopen)
 
     provider = OpenAICompatibleProvider(
         model_id="test-model",

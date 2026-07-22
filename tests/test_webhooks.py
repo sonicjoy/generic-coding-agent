@@ -14,7 +14,8 @@ from gca.integrations.webhooks import WebhookContext, WebhookVerificationError
 def test_github_issue_webhook_verifies_and_normalizes() -> None:
     body = json.dumps(
         {
-            "action": "opened",
+            "action": "labeled",
+            "label": {"name": "gca-run"},
             "repository": {
                 "full_name": "owner/repo",
                 "clone_url": "https://github.com/owner/repo.git",
@@ -61,6 +62,16 @@ def test_github_webhook_rejects_bad_signature() -> None:
         GitHubWebhookNormalizer().verify(context, "secret")
 
 
+def test_github_issue_requires_explicit_trigger_label() -> None:
+    context = WebhookContext(
+        provider="github",
+        headers={"X-GitHub-Event": "issues"},
+        body=json.dumps({"action": "opened"}).encode(),
+    )
+
+    assert GitHubWebhookNormalizer().normalize(context) is None
+
+
 def test_gitlab_issue_webhook_verifies_and_normalizes() -> None:
     body = json.dumps(
         {
@@ -71,11 +82,13 @@ def test_gitlab_issue_webhook_verifies_and_normalizes() -> None:
                 "default_branch": "main",
             },
             "object_attributes": {
-                "action": "open",
+                "action": "update",
                 "iid": 7,
                 "title": "Repair pipeline",
                 "description": "A stage fails.",
             },
+            "changes": {"labels": {"previous": [], "current": [{"title": "gca-run"}]}},
+            "labels": [{"title": "gca-run"}],
         }
     ).encode()
     context = WebhookContext(

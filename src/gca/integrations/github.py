@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from gca.integrations.git_auth import push_with_token
 from gca.integrations.http import request_json
@@ -19,6 +19,7 @@ from gca.integrations.webhooks import (
     issue_task,
 )
 from gca.jobs.models import PublicationTarget, RepositorySpec, RunSpec
+from gca.workspace.prepare import repository_host
 
 
 class GitHubScmAdapter:
@@ -31,14 +32,28 @@ class GitHubScmAdapter:
         token: str,
         *,
         api_url: str = "https://api.github.com",
+        git_host: str = "github.com",
     ) -> None:
         if not token:
             raise ValueError("GitHub token must not be empty")
         self.token = token
         self.api_url = api_url.rstrip("/")
+        self.git_host = git_host.lower()
 
-    def push(self, workspace: Path, branch: str) -> None:
-        push_with_token(workspace, branch, username="x-access-token", token=self.token)
+    def supports_repository(self, repository_url: str) -> bool:
+        return (
+            urlparse(repository_url).scheme == "https"
+            and repository_host(repository_url) == self.git_host
+        )
+
+    def push(self, workspace: Path, branch: str, repository_url: str) -> None:
+        push_with_token(
+            workspace,
+            branch,
+            repository_url=repository_url,
+            username="x-access-token",
+            token=self.token,
+        )
 
     def open_change_request(self, request: ChangeRequest) -> str:
         slug = repository_path(request.repository_url)
@@ -86,6 +101,11 @@ class GitHubWebhookNormalizer:
 
     provider = "github"
 
+    def __init__(self, *, trigger_label: str = "gca-run") -> None:
+        if not trigger_label.strip():
+            raise ValueError("GitHub trigger label must not be empty")
+        self.trigger_label = trigger_label
+
     def verify(self, context: WebhookContext, secret: str) -> None:
         signature = context.header("X-Hub-Signature-256")
         if not secret or not signature.startswith("sha256="):
@@ -114,7 +134,10 @@ class GitHubWebhookNormalizer:
             raise WebhookPayloadError(f"invalid GitHub JSON: {exc}") from exc
         if not isinstance(payload, dict):
             raise WebhookPayloadError("GitHub payload must be an object")
-        if payload.get("action") != "opened":
+        if payload.get("action") != "labeled":
+            return None
+        label = payload.get("label")
+        if not isinstance(label, dict) or label.get("name") != self.trigger_label:
             return None
         repository = payload.get("repository")
         issue = payload.get("issue")

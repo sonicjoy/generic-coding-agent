@@ -104,3 +104,13 @@ def test_explore_and_search_hide_protected_files(tmp_path: Path) -> None:
 
     assert ".env" not in explored
     assert searched == "no matches"
+
+
+def test_hosted_repository_policy_is_immutable(tmp_path: Path) -> None:
+    context = ToolContext(
+        workspace=tmp_path,
+        execution=ExecutionPolicy(profile="hosted"),
+    )
+
+    with pytest.raises(ToolError, match="immutable"):
+        context.resolve(".gca/config.yaml")

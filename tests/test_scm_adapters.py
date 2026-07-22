@@ -69,3 +69,13 @@ def test_gitlab_adapter_creates_merge_request_when_missing(monkeypatch: object) 
     assert [call[0] for call in calls] == ["GET", "POST"]
     assert calls[1][2] is not None
     assert calls[1][2]["source_branch"] == "gca/job"
+
+
+def test_scm_adapters_bind_tokens_to_expected_https_host() -> None:
+    github_adapter = GitHubScmAdapter("token", git_host="github.example")
+    gitlab_adapter = GitLabScmAdapter("token", git_host="gitlab.example")
+
+    assert github_adapter.supports_repository("https://github.example/owner/repo.git")
+    assert not github_adapter.supports_repository("https://attacker.example/owner/repo.git")
+    assert not github_adapter.supports_repository("git@github.example:owner/repo.git")
+    assert gitlab_adapter.supports_repository("https://gitlab.example/group/repo.git")

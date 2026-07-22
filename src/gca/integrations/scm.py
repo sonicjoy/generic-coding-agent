@@ -13,9 +13,16 @@ from typing import Any, Protocol
 
 from gca.credentials import CredentialBroker
 from gca.jobs.models import Job
-from gca.repo_config import RepoConfig, RepoConfigError, load_repo_config
+from gca.repo_config import RepoConfig
 from gca.tools.base import ExecutionPolicy, ToolContext
 from gca.tools.fixed import FixedCommandTool
+
+_CORE_DENIED_PATHS = (
+    ".gca/config.yaml",
+    ".gca/sessions/**",
+    ".env",
+    ".gca/.env",
+)
 
 
 class PublicationError(RuntimeError):
@@ -32,7 +39,12 @@ class PublicationPolicy:
 
     required_checks: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ()
-    denied_paths: tuple[str, ...] = (".gca/sessions/**", ".env", ".gca/.env")
+    denied_paths: tuple[str, ...] = (
+        ".gca/config.yaml",
+        ".gca/sessions/**",
+        ".env",
+        ".gca/.env",
+    )
     max_files: int = 100
     max_changed_lines: int = 5000
     commit_prefix: str = "gca"
@@ -57,7 +69,10 @@ class PublicationPolicy:
             required_checks=_strings(raw.get("required_checks", []), "required_checks"),
             allowed_paths=_strings(raw.get("allowed_paths", []), "allowed_paths"),
             denied_paths=_strings(
-                raw.get("denied_paths", [".gca/sessions/**", ".env", ".gca/.env"]),
+                raw.get(
+                    "denied_paths",
+                    [".gca/config.yaml", ".gca/sessions/**", ".env", ".gca/.env"],
+                ),
                 "denied_paths",
             ),
             max_files=_positive_int(raw.get("max_files", 100), "max_files"),
@@ -105,7 +120,9 @@ class ScmAdapter(Protocol):
 
     provider: str
 
-    def push(self, workspace: Path, branch: str) -> None: ...
+    def supports_repository(self, repository_url: str) -> bool: ...
+
+    def push(self, workspace: Path, branch: str, repository_url: str) -> None: ...
 
     def open_change_request(self, request: ChangeRequest) -> str: ...
 
@@ -126,7 +143,12 @@ class PublicationController:
         self.git_user_name = git_user_name
         self.git_user_email = git_user_email
 
-    def publish(self, job: Job, workspace: Path) -> dict[str, object]:
+    def publish(
+        self,
+        job: Job,
+        workspace: Path,
+        repo_config: RepoConfig,
+    ) -> dict[str, object]:
         """Publish one completed job through its configured SCM target."""
 
         target = job.run_spec.publication
@@ -135,10 +157,8 @@ class PublicationController:
         adapter = self.adapters.get(target.provider)
         if adapter is None:
             raise PublicationError(f"no SCM adapter configured for provider: {target.provider}")
-        try:
-            repo_config = load_repo_config(workspace)
-        except RepoConfigError as exc:
-            raise PublicationError(str(exc)) from exc
+        if not adapter.supports_repository(job.run_spec.repository.url):
+            raise PublicationError(f"{target.provider} adapter does not match repository host")
         policy = PublicationPolicy.from_mapping(repo_config.publication)
         self._run_required_checks(workspace, repo_config, policy)
 
@@ -191,7 +211,7 @@ class PublicationController:
             _enforce_diff(policy, committed_files, committed_lines)
 
         sha = _git(workspace, ["rev-parse", "HEAD"], self.credentials).strip()
-        adapter.push(workspace, branch)
+        adapter.push(workspace, branch, job.run_spec.repository.url)
         title = _commit_message(policy.commit_prefix, job.run_spec.task)
         request = ChangeRequest(
             repository_url=job.run_spec.repository.url,
@@ -353,6 +373,8 @@ def _enforce_diff(
             f"exceeding limit {policy.max_changed_lines}"
         )
     for path in files:
+        if any(fnmatch.fnmatch(path, pattern) for pattern in _CORE_DENIED_PATHS):
+            raise PublicationError(f"diff contains protected path: {path}")
         if policy.denied_paths and any(
             fnmatch.fnmatch(path, pattern) for pattern in policy.denied_paths
         ):

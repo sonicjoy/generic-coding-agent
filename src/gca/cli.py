@@ -44,7 +44,7 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
         [Path(d).resolve() for d in args.skills] if args.skills else list(repo_config.skill_dirs)
     )
     models_paths = [
-        *repo_config.model_paths,
+        *([] if args.trusted_models_only else repo_config.model_paths),
         *(Path(path).resolve() for path in (args.models or [])),
     ]
     return RuntimeConfig(
@@ -56,6 +56,7 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
         workflow=args.workflow,
         models_paths=models_paths or None,
         repo_config=repo_config,
+        trusted_model_paths_only=args.trusted_models_only,
     )
 
 
@@ -225,6 +226,7 @@ def _execute_local_job(
         plugin_dir=Path(args.plugins).resolve() if args.plugins else None,
         skill_dirs=[Path(value).resolve() for value in args.skills or []] or None,
         model_paths=[Path(value).resolve() for value in args.models or []] or None,
+        allowed_tool_secrets=frozenset(args.allow_tool_secret or []),
         on_event=_event_printer,
     )
     result = runner.execute(claimed)
@@ -248,6 +250,7 @@ def _add_job_runtime_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--models", action="append", default=None)
     parser.add_argument("--skills", action="append", default=None)
     parser.add_argument("--script", default=None)
+    parser.add_argument("--allow-tool-secret", action="append", default=None)
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -276,6 +279,11 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         help="Override workflow selection (default: AGENTS.md or auto).",
     )
     parser.add_argument("--script", default=None, help="JSON script for the scripted provider.")
+    parser.add_argument(
+        "--trusted-models-only",
+        action="store_true",
+        help="Ignore checkout-local model catalogs; use user/--models catalogs only.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

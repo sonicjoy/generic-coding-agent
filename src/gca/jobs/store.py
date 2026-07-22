@@ -322,6 +322,29 @@ class SqliteJobStore:
         self.save(job)
         return job
 
+    def touch_lease(self, job_id: str, worker_id: str, *, lease_seconds: int) -> None:
+        """Renew lease columns without changing the optimistic job payload version."""
+
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET lease_expires_at = ?
+                WHERE id = ? AND lease_owner = ? AND status IN (?, ?)
+                """,
+                (
+                    time.time() + lease_seconds,
+                    job_id,
+                    worker_id,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise JobConcurrencyError(f"worker lost job lease: {job_id}")
+
     def _claim_row(
         self,
         connection: sqlite3.Connection,

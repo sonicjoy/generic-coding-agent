@@ -176,3 +176,50 @@ def test_job_runner_requeues_retryable_provider_failure(tmp_path: Path) -> None:
     assert result.status == JobStatus.QUEUED
     assert "rate limited" in result.last_error
     assert result.not_before > 0
+
+
+def test_hosted_job_rejects_unapproved_repository_tool_secrets(tmp_path: Path) -> None:
+    source = _source_repository(tmp_path)
+    config_dir = source / ".gca"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        """
+version: 1
+tools:
+  secret_access:
+    run_tests: [DATABASE_URL]
+  fixed_commands:
+    run_tests:
+      argv: [python, --version]
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", ".gca/config.yaml"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add agent config"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+    )
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(
+        RunSpec(
+            task="Fix a typo",
+            repository=RepositorySpec(str(source), ref="main"),
+            workflow="fast",
+        )
+    )
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker")
+    assert claimed is not None
+
+    result = JobRunner(
+        store=store,
+        workspace_root=tmp_path / "workspaces",
+        model_loader=lambda config: LoadedPlugins(),
+        allow_local_repositories=True,
+    ).execute(claimed)
+
+    assert result.status == JobStatus.FAILED
+    assert "unapproved tool secrets" in result.last_error

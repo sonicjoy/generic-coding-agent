@@ -81,7 +81,8 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
     client = TestClient(create_app(_settings(tmp_path)))
     body = json.dumps(
         {
-            "action": "opened",
+            "action": "labeled",
+            "label": {"name": "gca-run"},
             "repository": {
                 "full_name": "owner/repo",
                 "clone_url": "https://github.com/owner/repo.git",
@@ -106,7 +107,8 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
     }
 
     first = client.post("/webhooks/github", content=body, headers=headers)
-    replay = client.post("/webhooks/github", content=body, headers=headers)
+    replay_headers = {**headers, "X-GitHub-Delivery": "delivery-2"}
+    replay = client.post("/webhooks/github", content=body, headers=replay_headers)
 
     assert first.status_code == 202
     assert replay.status_code == 202

@@ -7,6 +7,7 @@ import pytest
 
 from gca.integrations.scm import ChangeRequest, PublicationController, PublicationError
 from gca.jobs.models import Job, PublicationTarget, RepositorySpec, RunSpec
+from gca.repo_config import load_repo_config
 
 
 class FakeAdapter:
@@ -16,7 +17,10 @@ class FakeAdapter:
         self.pushed: list[str] = []
         self.requests: list[ChangeRequest] = []
 
-    def push(self, workspace: Path, branch: str) -> None:
+    def supports_repository(self, repository_url: str) -> bool:
+        return True
+
+    def push(self, workspace: Path, branch: str, repository_url: str) -> None:
         self.pushed.append(branch)
 
     def open_change_request(self, request: ChangeRequest) -> str:
@@ -83,7 +87,11 @@ def test_controller_checks_commits_pushes_and_opens_change_request(tmp_path: Pat
     (source / "change.py").write_text("VALUE = 1\n", encoding="utf-8")
     adapter = FakeAdapter()
 
-    result = PublicationController({"fake": adapter}).publish(_job(repository), repository)
+    result = PublicationController({"fake": adapter}).publish(
+        _job(repository),
+        repository,
+        load_repo_config(repository),
+    )
 
     assert result["change_request_url"] == "https://scm.example/change/1"
     assert result["branch"] == "gca/aaaaaaaaaaaa"
@@ -96,7 +104,11 @@ def test_controller_skips_empty_change_request(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     adapter = FakeAdapter()
 
-    result = PublicationController({"fake": adapter}).publish(_job(repository), repository)
+    result = PublicationController({"fake": adapter}).publish(
+        _job(repository),
+        repository,
+        load_repo_config(repository),
+    )
 
     assert result["no_changes"] is True
     assert adapter.pushed == []
@@ -107,5 +119,38 @@ def test_controller_rejects_disallowed_paths(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     (repository / ".env").write_text("SECRET=value\n", encoding="utf-8")
 
-    with pytest.raises(PublicationError, match="denied path"):
-        PublicationController({"fake": FakeAdapter()}).publish(_job(repository), repository)
+    with pytest.raises(PublicationError, match="protected path"):
+        PublicationController({"fake": FakeAdapter()}).publish(
+            _job(repository),
+            repository,
+            load_repo_config(repository),
+        )
+
+
+def test_controller_uses_immutable_pre_run_policy_snapshot(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    snapshot = load_repo_config(repository)
+    (repository / ".gca" / "config.yaml").write_text(
+        """
+version: 1
+tools:
+  fixed_commands:
+    injected:
+      argv: [python, -c, "from pathlib import Path; Path('owned.txt').write_text('bad')"]
+publication:
+  required_checks: [injected]
+""",
+        encoding="utf-8",
+    )
+    source = repository / "src"
+    source.mkdir()
+    (source / "change.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="protected path"):
+        PublicationController({"fake": FakeAdapter()}).publish(
+            _job(repository),
+            repository,
+            snapshot,
+        )
+
+    assert not (repository / "owned.txt").exists()

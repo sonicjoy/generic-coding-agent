@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -49,7 +51,7 @@ async def receive_webhook(request: Request) -> Response:
     )
     try:
         normalizer.verify(context, secret)
-        delivery_id = normalizer.delivery_id(context)
+        normalizer.delivery_id(context)
         spec = normalizer.normalize(context, allowed_projects=allowed_projects)
         if spec is None:
             return Response(status_code=204)
@@ -60,7 +62,7 @@ async def receive_webhook(request: Request) -> Response:
         )
         job = state.store.create(
             spec,
-            idempotency_key=f"webhook:{provider}:{delivery_id}",
+            idempotency_key=(f"webhook:{provider}:{hashlib.sha256(context.body).hexdigest()}"),
         )
         if job.status == JobStatus.QUEUED:
             job = state.queue.enqueue(job.id)
