@@ -475,6 +475,18 @@ def _score(
                     )
                 )
 
+    absent_files = expect.get("absent_files", [])
+    if isinstance(absent_files, list):
+        for relative in absent_files:
+            path = workspace / str(relative)
+            checks.append(
+                EvalCheck(
+                    f"file_absent:{relative}",
+                    not path.exists(),
+                    f"expected {relative} to be absent",
+                )
+            )
+
     if not checks:
         checks.append(EvalCheck("expect", False, "scenario expect block was empty"))
     return checks
