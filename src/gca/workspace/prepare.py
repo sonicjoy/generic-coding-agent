@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from gca.credentials import CredentialBroker
 from gca.git_credentials import GitCredentials, git_credential_env
 from gca.jobs.models import RepositorySpec
 
@@ -64,7 +65,11 @@ def prepare_repository(
         str(destination),
     ]
     try:
-        base_env = dict(env) if env is not None else {}
+        base_env = (
+            dict(env)
+            if env is not None
+            else CredentialBroker.from_environment().subprocess_env("local")
+        )
         with git_credential_env(base_env, credentials) as git_env:
             result = subprocess.run(
                 argv,

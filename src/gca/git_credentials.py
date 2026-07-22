@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -10,11 +11,17 @@ from pathlib import Path
 
 _ASKPASS = """#!/usr/bin/env python3
 import os
+import re
 import sys
+from urllib.parse import urlparse
 
 prompt = sys.argv[1] if len(sys.argv) > 1 else ""
 expected_host = os.environ.get("GCA_GIT_HOST", "")
-if expected_host and expected_host.lower() not in prompt.lower():
+hosts = {
+    urlparse(url).hostname
+    for url in re.findall(r"https?://[^\\\\s'\\"]+", prompt)
+}
+if expected_host and expected_host.lower() not in {host.lower() for host in hosts if host}:
     raise SystemExit("credential prompt host mismatch")
 name = "GCA_GIT_USERNAME" if "username" in prompt.lower() else "GCA_GIT_TOKEN"
 print(os.environ[name])
@@ -39,6 +46,8 @@ def git_credential_env(
 
     environment = dict(base_env)
     environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
     if credentials is None:
         yield environment
         return

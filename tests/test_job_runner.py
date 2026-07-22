@@ -222,4 +222,4 @@ tools:
     ).execute(claimed)
 
     assert result.status == JobStatus.FAILED
-    assert "unapproved tool secrets" in result.last_error
+    assert "unapproved tool secret grants" in result.last_error

@@ -154,3 +154,38 @@ publication:
         )
 
     assert not (repository / "owned.txt").exists()
+
+
+def test_publication_secret_grants_are_project_and_tool_scoped(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    repository = _repository(tmp_path)
+    (repository / ".gca" / "config.yaml").write_text(
+        """
+version: 1
+tools:
+  secret_access:
+    verify: [DATABASE_URL]
+  fixed_commands:
+    verify:
+      argv: [python, --version]
+publication:
+  required_checks: [verify]
+  allowed_paths: ["src/**"]
+""",
+        encoding="utf-8",
+    )
+    _git(repository, "add", ".gca/config.yaml")
+    _git(repository, "commit", "-m", "Configure scoped check")
+    source = repository / "src"
+    source.mkdir()
+    (source / "change.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.setenv("DATABASE_URL", "secret")  # type: ignore[attr-defined]
+
+    with pytest.raises(PublicationError, match="unapproved publication secret grants"):
+        PublicationController({"fake": FakeAdapter()}).publish(
+            _job(repository),
+            repository,
+            load_repo_config(repository),
+        )

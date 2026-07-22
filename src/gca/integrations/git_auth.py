@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -25,34 +26,61 @@ def push_with_token(
     if parsed.scheme != "https" or not parsed.hostname:
         raise PublicationError("token-authenticated publication requires an HTTPS repository URL")
     broker = CredentialBroker({"SCM_TOKEN": token})
-    with git_credential_env(
-        broker.subprocess_env("hosted"),
-        GitCredentials(username=username, token=token, host=parsed.hostname),
-    ) as env:
-        result = subprocess.run(
-            [
-                "git",
-                "-c",
-                "credential.helper=",
-                "-c",
-                "http.followRedirects=false",
-                "push",
-                "-u",
-                "--",
-                repository_url,
-                f"{branch}:refs/heads/{branch}",
-            ],
-            shell=False,
-            cwd=workspace,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-    if result.returncode != 0:
-        output = broker.redact((result.stdout or "") + (result.stderr or ""))
-        raise PublicationError(
-            f"git push failed: {output.strip()}",
-            retryable=True,
-        )
+    base_env = broker.subprocess_env("hosted")
+    with tempfile.TemporaryDirectory(prefix="gca-publish-") as temporary:
+        mirror = Path(temporary) / "repository.git"
+        with git_credential_env(base_env, None) as clone_env:
+            clone = subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--bare",
+                    "--no-local",
+                    "--no-tags",
+                    "--branch",
+                    branch,
+                    "--",
+                    str(workspace),
+                    str(mirror),
+                ],
+                shell=False,
+                env=clone_env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        if clone.returncode != 0:
+            output = broker.redact((clone.stdout or "") + (clone.stderr or ""))
+            raise PublicationError(f"could not prepare clean Git metadata: {output.strip()}")
+
+        with git_credential_env(
+            base_env,
+            GitCredentials(username=username, token=token, host=parsed.hostname),
+        ) as push_env:
+            push = subprocess.run(
+                [
+                    "git",
+                    f"--git-dir={mirror}",
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    "http.followRedirects=false",
+                    "push",
+                    "--",
+                    repository_url,
+                    f"{branch}:refs/heads/{branch}",
+                ],
+                shell=False,
+                env=push_env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        if push.returncode != 0:
+            output = broker.redact((push.stdout or "") + (push.stderr or ""))
+            raise PublicationError(
+                f"git push failed: {output.strip()}",
+                retryable=True,
+            )

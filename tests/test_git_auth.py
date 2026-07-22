@@ -27,7 +27,9 @@ def test_push_uses_explicit_bound_remote_and_disables_redirects(
         token="secret",
     )
 
-    argv = calls[0]
+    assert "clone" in calls[0]
+    argv = calls[1]
+    assert any(argument.startswith("--git-dir=") for argument in argv)
     assert "credential.helper=" in argv
     assert "http.followRedirects=false" in argv
     assert "https://github.example/owner/repo.git" in argv

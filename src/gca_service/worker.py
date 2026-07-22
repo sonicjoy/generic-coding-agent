@@ -8,6 +8,7 @@ from collections.abc import Callable
 from gca.git_credentials import GitCredentials
 from gca.integrations.github import GitHubScmAdapter
 from gca.integrations.gitlab import GitLabScmAdapter
+from gca.integrations.repository import repository_identity
 from gca.integrations.scm import PublicationController, ScmAdapter
 from gca.jobs.models import Job, JobStatus, RepositorySpec
 from gca.jobs.runner import JobRunner, RuntimeModelLoader
@@ -106,6 +107,14 @@ class ServiceWorker:
                 return GitCredentials("oauth2", settings.gitlab_token, host)
             return None
 
+        try:
+            tool_secret_grants = settings.tool_secret_grants.get(
+                repository_identity(job.run_spec.repository.url),
+                {},
+            )
+        except ValueError:
+            tool_secret_grants = {}
+
         with _LeaseKeeper(self.state, job) as lease:
             runner = JobRunner(
                 store=self.state.store,
@@ -120,7 +129,7 @@ class ServiceWorker:
                 on_event=self.on_event,
                 lease_heartbeat=lambda active: lease.touch(),
                 repository_credentials=clone_credentials,
-                allowed_tool_secrets=settings.allowed_tool_secrets,
+                allowed_tool_secret_grants=tool_secret_grants,
             )
             result = runner.execute(job)
             lease.check()
@@ -151,4 +160,11 @@ def _publisher(state: ServiceState) -> PublicationController | None:
             api_url=settings.gitlab_api_url,
             git_host=settings.gitlab_host,
         )
-    return PublicationController(adapters) if adapters else None
+    return (
+        PublicationController(
+            adapters,
+            tool_secret_grants=state.settings.tool_secret_grants,
+        )
+        if adapters
+        else None
+    )

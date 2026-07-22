@@ -128,12 +128,15 @@ class SqliteJobStore:
         job.updated_at = utc_now()
         payload = job.to_dict()
         payload["version"] = next_version
+        active = job.status in {JobStatus.RUNNING, JobStatus.PUBLISHING}
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = ?, data = ?, version = ?, not_before = ?,
-                    lease_owner = ?, lease_expires_at = ?, updated_at = ?
+                    lease_owner = CASE WHEN ? THEN lease_owner ELSE ? END,
+                    lease_expires_at = CASE WHEN ? THEN lease_expires_at ELSE ? END,
+                    updated_at = ?
                 WHERE id = ? AND version = ?
                 """,
                 (
@@ -141,7 +144,9 @@ class SqliteJobStore:
                     json.dumps(payload, sort_keys=True),
                     next_version,
                     job.not_before,
+                    active,
                     job.lease_owner,
+                    active,
                     job.lease_expires_at,
                     job.updated_at,
                     job.id,
@@ -318,8 +323,8 @@ class SqliteJobStore:
             or job.lease_owner != worker_id
         ):
             raise JobConcurrencyError(f"worker does not hold active job lease: {job_id}")
+        self.touch_lease(job_id, worker_id, lease_seconds=lease_seconds)
         job.lease_expires_at = time.time() + lease_seconds
-        self.save(job)
         return job
 
     def touch_lease(self, job_id: str, worker_id: str, *, lease_seconds: int) -> None:

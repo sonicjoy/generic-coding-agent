@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
@@ -61,7 +61,7 @@ class JobRunner:
         on_event: EventHook | None = None,
         lease_heartbeat: LeaseHeartbeat | None = None,
         repository_credentials: RepositoryCredentialResolver | None = None,
-        allowed_tool_secrets: frozenset[str] = frozenset(),
+        allowed_tool_secret_grants: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
@@ -76,7 +76,7 @@ class JobRunner:
         self.on_event = on_event
         self.lease_heartbeat = lease_heartbeat
         self.repository_credentials = repository_credentials
-        self.allowed_tool_secrets = allowed_tool_secrets
+        self.allowed_tool_secret_grants = dict(allowed_tool_secret_grants or {})
         self.credentials = CredentialBroker.from_environment()
 
     def execute(self, job: Job) -> Job:
@@ -120,14 +120,24 @@ class JobRunner:
                 repo_config,
                 runtime=replace(repo_config.runtime, profile="hosted"),
             )
-        configured_secrets = {
-            name for names in repo_config.tools.secret_access.values() for name in names
+        unauthorized_grants = {
+            tool: sorted(
+                secrets
+                - self.allowed_tool_secret_grants.get(tool, frozenset())
+                - self.allowed_tool_secret_grants.get("*", frozenset())
+            )
+            for tool, secrets in repo_config.tools.secret_access.items()
         }
-        unauthorized_secrets = sorted(configured_secrets - self.allowed_tool_secrets)
-        if self.hosted_mode and unauthorized_secrets:
+        unauthorized_grants = {
+            tool: secrets for tool, secrets in unauthorized_grants.items() if secrets
+        }
+        if self.hosted_mode and unauthorized_grants:
+            details = "; ".join(
+                f"{tool}={','.join(secrets)}"
+                for tool, secrets in sorted(unauthorized_grants.items())
+            )
             raise ValueError(
-                "hosted repository requested unapproved tool secrets: "
-                + ", ".join(unauthorized_secrets)
+                "hosted repository requested unapproved tool secret grants: " + details
             )
         max_steps = job.run_spec.max_steps or repo_config.runtime.max_steps
         runtime = RuntimeConfig(

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from gca.credentials import CredentialBroker
+from gca.integrations.repository import repository_identity
 from gca.jobs.models import Job
 from gca.repo_config import RepoConfig
 from gca.tools.base import ExecutionPolicy, ToolContext
@@ -137,11 +138,15 @@ class PublicationController:
         credentials: CredentialBroker | None = None,
         git_user_name: str = "Generic Coding Agent",
         git_user_email: str = "gca@localhost",
+        tool_secret_grants: Mapping[str, Mapping[str, frozenset[str]]] | None = None,
     ) -> None:
         self.adapters = dict(adapters)
         self.credentials = credentials or CredentialBroker.from_environment()
         self.git_user_name = git_user_name
         self.git_user_email = git_user_email
+        self.tool_secret_grants = {
+            project.lower(): dict(tools) for project, tools in (tool_secret_grants or {}).items()
+        }
 
     def publish(
         self,
@@ -160,7 +165,7 @@ class PublicationController:
         if not adapter.supports_repository(job.run_spec.repository.url):
             raise PublicationError(f"{target.provider} adapter does not match repository host")
         policy = PublicationPolicy.from_mapping(repo_config.publication)
-        self._run_required_checks(workspace, repo_config, policy)
+        self._run_required_checks(job, workspace, repo_config, policy)
 
         branch = _branch_name(target.branch_prefix, job.id)
         _git(workspace, ["check-ref-format", "--branch", branch], self.credentials)
@@ -231,10 +236,28 @@ class PublicationController:
 
     def _run_required_checks(
         self,
+        job: Job,
         workspace: Path,
         repo_config: RepoConfig,
         policy: PublicationPolicy,
     ) -> None:
+        try:
+            project = repository_identity(job.run_spec.repository.url)
+        except ValueError:
+            project = ""
+        grants = self.tool_secret_grants.get(project, {})
+        unauthorized = {
+            tool: sorted(secrets - grants.get(tool, frozenset()) - grants.get("*", frozenset()))
+            for tool, secrets in repo_config.tools.secret_access.items()
+        }
+        unauthorized = {tool: secrets for tool, secrets in unauthorized.items() if secrets}
+        if unauthorized:
+            details = "; ".join(
+                f"{tool}={','.join(names)}" for tool, names in sorted(unauthorized.items())
+            )
+            raise PublicationError(
+                f"repository requested unapproved publication secret grants: {details}"
+            )
         configured_names = frozenset(
             secret for secrets in repo_config.tools.secret_access.values() for secret in secrets
         )

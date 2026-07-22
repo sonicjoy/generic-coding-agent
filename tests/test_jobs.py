@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 
@@ -21,6 +22,24 @@ def _spec(task: str = "Fix a typo") -> RunSpec:
         repository=RepositorySpec("https://example.test/repo.git"),
         workflow="fast",
     )
+
+
+def _expire_lease(store: SqliteJobStore, job_id: str) -> None:
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE jobs SET lease_expires_at = ? WHERE id = ?",
+            (time.time() - 1, job_id),
+        )
+
+
+def _lease_expiration(store: SqliteJobStore, job_id: str) -> float:
+    with sqlite3.connect(store.path) as connection:
+        row = connection.execute(
+            "SELECT lease_expires_at FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    assert row is not None
+    return float(row[0])
 
 
 def test_sqlite_store_is_idempotent_and_detects_conflicts(tmp_path: Path) -> None:
@@ -61,8 +80,7 @@ def test_expired_lease_is_requeued(tmp_path: Path) -> None:
     queue.enqueue(created.id)
     claimed = queue.claim("worker-a", lease_seconds=1)
     assert claimed is not None
-    claimed.lease_expires_at = time.time() - 1
-    store.save(claimed)
+    _expire_lease(store, claimed.id)
 
     recovered = queue.claim("worker-b")
 
@@ -106,8 +124,7 @@ def test_expired_final_attempt_becomes_failed(tmp_path: Path) -> None:
     queue.enqueue(created.id)
     claimed = queue.claim("worker", lease_seconds=1)
     assert claimed is not None
-    claimed.lease_expires_at = time.time() - 1
-    store.save(claimed)
+    _expire_lease(store, claimed.id)
 
     assert queue.claim("other-worker") is None
     failed = store.load(created.id)
@@ -144,8 +161,8 @@ def test_expired_publication_lease_can_retry_idempotently(tmp_path: Path) -> Non
     assert claimed is not None
     transition_job(claimed, JobStatus.PUBLISHING)
     assert claimed.lease_owner == "worker"
-    claimed.lease_expires_at = time.time() - 1
     store.save(claimed)
+    _expire_lease(store, claimed.id)
 
     retried = queue.claim("retry-worker")
 
@@ -153,3 +170,19 @@ def test_expired_publication_lease_can_retry_idempotently(tmp_path: Path) -> Non
     assert retried.id == claimed.id
     assert retried.status == JobStatus.RUNNING
     assert retried.attempt == 2
+
+
+def test_regular_save_does_not_shorten_periodically_renewed_lease(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(_spec())
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker", lease_seconds=10)
+    assert claimed is not None
+    store.touch_lease(claimed.id, "worker", lease_seconds=100)
+    renewed = _lease_expiration(store, claimed.id)
+
+    claimed.last_error = "checkpoint"
+    store.save(claimed)
+
+    assert _lease_expiration(store, claimed.id) == renewed

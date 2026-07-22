@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from urllib.parse import unquote, urlparse
 
-_SCP_STYLE = re.compile(r"^[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+:(?P<path>.+)$")
+_SCP_STYLE = re.compile(r"^[A-Za-z0-9_.-]+@(?P<host>[A-Za-z0-9.-]+):(?P<path>.+)$")
 
 
 def repository_path(url: str) -> str:
@@ -25,3 +25,17 @@ def repository_path(url: str) -> str:
     if "/" not in normalized:
         raise ValueError(f"repository URL has no owner/group path: {url}")
     return normalized
+
+
+def repository_identity(url: str) -> str:
+    """Return a canonical host/path key for operator policy lookup."""
+
+    parsed = urlparse(url)
+    if parsed.scheme in {"https", "ssh"}:
+        host = parsed.hostname
+    else:
+        match = _SCP_STYLE.fullmatch(url)
+        host = match.group("host") if match is not None else None
+    if not host:
+        raise ValueError(f"cannot derive repository host from URL: {url}")
+    return f"{host.lower()}/{repository_path(url).lower()}"

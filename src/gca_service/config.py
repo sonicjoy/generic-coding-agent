@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -40,7 +42,7 @@ class ServiceSettings:
     max_request_bytes: int = 1_000_000
     model_paths: tuple[Path, ...] = ()
     plugin_dir: Path | None = None
-    allowed_tool_secrets: frozenset[str] = frozenset()
+    tool_secret_grants: dict[str, dict[str, frozenset[str]]] = field(default_factory=dict)
 
     @property
     def database_path(self) -> Path:
@@ -96,7 +98,7 @@ class ServiceSettings:
             plugin_dir=(
                 Path(values["GCA_PLUGIN_DIR"]).resolve() if values.get("GCA_PLUGIN_DIR") else None
             ),
-            allowed_tool_secrets=_csv(values.get("GCA_ALLOWED_TOOL_SECRETS", "")),
+            tool_secret_grants=_secret_grants(values.get("GCA_TOOL_SECRET_GRANTS", "")),
         )
         settings.validate()
         return settings
@@ -141,10 +143,14 @@ class ServiceSettings:
             )
         if self.plugin_dir is not None and not self.plugin_dir.is_dir():
             raise ServiceConfigError(f"plugin directory does not exist: {self.plugin_dir}")
-        invalid_secrets = sorted(
+        all_secret_names = {
             name
-            for name in self.allowed_tool_secrets
-            if re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None
+            for tools in self.tool_secret_grants.values()
+            for names in tools.values()
+            for name in names
+        }
+        invalid_secrets = sorted(
+            name for name in all_secret_names if re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None
         )
         if invalid_secrets:
             raise ServiceConfigError(
@@ -156,7 +162,7 @@ class ServiceSettings:
             "GCA_GITHUB_WEBHOOK_SECRET",
             "GCA_GITLAB_TOKEN",
             "GCA_GITLAB_WEBHOOK_SECRET",
-        } & set(self.allowed_tool_secrets)
+        } & all_secret_names
         if reserved:
             raise ServiceConfigError(
                 f"service-owned secrets cannot be granted to tools: {', '.join(sorted(reserved))}"
@@ -165,6 +171,40 @@ class ServiceSettings:
 
 def _csv(value: str) -> frozenset[str]:
     return frozenset(item.strip() for item in value.split(",") if item.strip())
+
+
+def _secret_grants(value: str) -> dict[str, dict[str, frozenset[str]]]:
+    if not value.strip():
+        return {}
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ServiceConfigError(f"GCA_TOOL_SECRET_GRANTS must be valid JSON: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise ServiceConfigError("GCA_TOOL_SECRET_GRANTS must be a project mapping")
+    result: dict[str, dict[str, frozenset[str]]] = {}
+    for project, tools in raw.items():
+        if not isinstance(project, str) or not project.strip() or not isinstance(tools, Mapping):
+            raise ServiceConfigError("tool secret grants require project and tool mappings")
+        if "/" not in project or "://" in project:
+            raise ServiceConfigError(
+                "tool secret grant projects must use canonical host/group/repository keys"
+            )
+        project_tools: dict[str, frozenset[str]] = {}
+        for tool, names in tools.items():
+            if not isinstance(tool, str) or (
+                tool != "*" and re.fullmatch(r"[a-z][a-z0-9_]*", tool) is None
+            ):
+                raise ServiceConfigError(f"invalid tool secret grant name: {tool}")
+            if not isinstance(names, list) or not all(
+                isinstance(name, str) and name.strip() for name in names
+            ):
+                raise ServiceConfigError(
+                    f"tool secret grant {project}.{tool} must be a list of names"
+                )
+            project_tools[tool] = frozenset(name.strip() for name in names)
+        result[project.strip().lower()] = project_tools
+    return result
 
 
 def _integer(value: str, name: str) -> int:

@@ -30,7 +30,7 @@ def test_git_credentials_are_scoped_to_temporary_askpass_environment() -> None:
         assert username == "oauth2"
         assert token == "secret-token"
         mismatch = subprocess.run(
-            [str(askpass_path), "Password for https://attacker.example"],
+            [str(askpass_path), "Password for https://git.example.attacker.test"],
             env=environment,
             capture_output=True,
             text=True,

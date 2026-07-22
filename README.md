@@ -477,9 +477,17 @@ operator-installed `GCA_PLUGIN_DIR` instead. They also ignore checkout-local
 model catalogs and use `~/.gca/models.yaml` plus operator-owned
 `GCA_MODEL_CONFIG_PATHS`; this prevents a repository from selecting a service
 secret as its provider key. Repository tool secret requests are denied unless
-the environment name is explicitly listed in `GCA_ALLOWED_TOOL_SECRETS`; API,
-webhook, and SCM tokens should never be listed. Publication uses the immutable
-manifest snapshot loaded before the agent runs.
+the exact canonical project, tool, and environment name are granted in
+`GCA_TOOL_SECRET_GRANTS`; API, webhook, and SCM tokens cannot be granted.
+Publication uses the immutable manifest snapshot loaded before the agent runs.
+
+```bash
+export GCA_TOOL_SECRET_GRANTS='{
+  "github.com/example/project": {
+    "query_metrics": ["METRICS_TOKEN"]
+  }
+}'
+```
 
 The built-in controls are not an OS sandbox: deploy workers in isolated
 containers with filesystem, resource, and network-egress limits. Monitoring /

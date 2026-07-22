@@ -226,7 +226,7 @@ def _execute_local_job(
         plugin_dir=Path(args.plugins).resolve() if args.plugins else None,
         skill_dirs=[Path(value).resolve() for value in args.skills or []] or None,
         model_paths=[Path(value).resolve() for value in args.models or []] or None,
-        allowed_tool_secrets=frozenset(args.allow_tool_secret or []),
+        allowed_tool_secret_grants={"*": frozenset(args.allow_tool_secret or [])},
         on_event=_event_printer,
     )
     result = runner.execute(claimed)
