@@ -1,5 +1,5 @@
-id: models_yaml_named_profiles
-description: Named models from profiles should bind correctly for feature roles.
+id: named_model_bindings
+description: AGENTS.md role preferences should bind named registered models to feature roles.
 task: Implement named-model routing
 workflow: feature
 max_steps: 8

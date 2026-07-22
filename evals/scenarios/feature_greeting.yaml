@@ -47,3 +47,22 @@ expect:
     greeting.py:
       contains: def greet
   final_contains: Greeting behavior verified.
+  tool_exposure:
+    # Planner (strong call 0) is read-only: no editing or command execution.
+    - script: strong
+      call: 0
+      forbids: [create_file, write_file, apply_patch, delete_file, move_file, run_command]
+      requires: [explore, read_file, search, finish]
+    # Reviewer (strong calls 1-2) may run checks but never edit files.
+    - script: strong
+      call: 1
+      forbids: [create_file, write_file, apply_patch, delete_file, move_file]
+      requires: [run_command, read_file, finish]
+    - script: strong
+      call: 2
+      forbids: [create_file, write_file, apply_patch, delete_file, move_file]
+      requires: [run_command]
+    # Implementer (fast call 0) gets the full editing toolset.
+    - script: fast
+      call: 0
+      requires: [create_file, write_file, apply_patch, run_command, finish]

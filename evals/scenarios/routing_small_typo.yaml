@@ -16,3 +16,6 @@ expect:
   active_model: fast
   final_contains: Fixed the typo.
   max_steps: 3
+  script_calls:
+    fast: 1
+    strong: 0

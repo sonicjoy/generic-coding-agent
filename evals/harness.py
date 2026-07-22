@@ -2,7 +2,8 @@
 
 Scenarios live as YAML under ``evals/scenarios/``. Each scenario drives
 scripted models through ``create_coordinator`` and scores observable outcomes
-such as workflow selection, phase order, model bindings, artifacts, and files.
+such as workflow selection, phase order, model bindings, artifacts, files,
+tool exposure per model call, and full script consumption.
 """
 
 from __future__ import annotations
@@ -15,11 +16,30 @@ from typing import Any
 import yaml
 
 from gca.models import ModelProfile, ModelRegistry
+from gca.providers.base import LLMResponse, Message, ToolSpec
 from gca.providers.scripted import ScriptedProvider
 from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import Session, SessionStore
 
 SCENARIOS_DIR = Path(__file__).resolve().parent / "scenarios"
+
+
+class RecordingScriptedProvider(ScriptedProvider):
+    """Scripted provider that records the tool names advertised on each call."""
+
+    def __init__(self, steps: list[LLMResponse], final_text: str = "Done.") -> None:
+        super().__init__(steps, final_text)
+        self.tool_names_per_call: list[set[str]] = []
+
+    def complete(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        self.tool_names_per_call.append({tool.name for tool in tools})
+        return super().complete(messages, tools)
+
+    @property
+    def remaining_steps(self) -> int:
+        """Return how many scripted steps were never consumed."""
+
+        return len(self._steps) - self._index
 
 
 @dataclass(frozen=True)
@@ -61,10 +81,10 @@ class EvalScenario:
     max_steps: int = 25
     resume_max_steps: int | None = None
     agents_md: str | None = None
-    models_yaml: str | None = None
     scripts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     model_profiles: list[dict[str, Any]] = field(default_factory=list)
     expect: dict[str, Any] = field(default_factory=dict)
+    allow_unused_scripts: bool = False
 
 
 def discover_scenarios(root: Path | None = None) -> list[EvalScenario]:
@@ -107,10 +127,10 @@ def load_scenario(path: Path) -> EvalScenario:
             int(raw["resume_max_steps"]) if raw.get("resume_max_steps") is not None else None
         ),
         agents_md=raw.get("agents_md"),
-        models_yaml=raw.get("models_yaml"),
         scripts={str(name): list(steps) for name, steps in scripts.items()},
         model_profiles=[dict(profile) for profile in profiles],
         expect=dict(expect),
+        allow_unused_scripts=bool(raw.get("allow_unused_scripts", False)),
     )
 
 
@@ -120,13 +140,11 @@ def run_scenario(scenario: EvalScenario, workspace: Path) -> EvalResult:
     workspace.mkdir(parents=True, exist_ok=True)
     if scenario.agents_md:
         (workspace / "AGENTS.md").write_text(scenario.agents_md, encoding="utf-8")
-    if scenario.models_yaml:
-        (workspace / "models.yaml").write_text(scenario.models_yaml, encoding="utf-8")
 
     sessions_dir = workspace / ".gca" / "sessions"
     store = SessionStore(sessions_dir)
     session = store.create(scenario.task)
-    registry = _build_registry(scenario)
+    registry, providers = _build_registry(scenario)
     config = RuntimeConfig(
         workspace=workspace,
         sessions_dir=sessions_dir,
@@ -143,11 +161,14 @@ def run_scenario(scenario: EvalScenario, workspace: Path) -> EvalResult:
             max_steps=scenario.resume_max_steps,
             workflow=scenario.workflow,
         )
-        registry = _build_registry(scenario)
+        registry, providers = _build_registry(scenario)
         result = create_coordinator(resume_config, registry).run(reloaded, store)
         session = reloaded
 
     checks = _score(scenario, workspace, session, result.status, result.steps, result.final_message)
+    checks.extend(_score_tool_exposure(scenario, providers))
+    checks.extend(_score_script_calls(scenario, providers))
+    checks.extend(_score_script_consumption(scenario, providers))
     return EvalResult(
         scenario_id=scenario.id,
         passed=all(check.passed for check in checks),
@@ -158,9 +179,12 @@ def run_scenario(scenario: EvalScenario, workspace: Path) -> EvalResult:
     )
 
 
-def _build_registry(scenario: EvalScenario) -> ModelRegistry:
-    providers = {
-        name: ScriptedProvider.from_script(steps) for name, steps in scenario.scripts.items()
+def _build_registry(
+    scenario: EvalScenario,
+) -> tuple[ModelRegistry, dict[str, RecordingScriptedProvider]]:
+    providers: dict[str, RecordingScriptedProvider] = {
+        name: RecordingScriptedProvider.from_script(steps)
+        for name, steps in scenario.scripts.items()
     }
     registry = ModelRegistry()
     if scenario.model_profiles:
@@ -179,7 +203,7 @@ def _build_registry(scenario: EvalScenario) -> ModelRegistry:
                     model_id=str(profile.get("model_id", name)),
                 )
             )
-        return registry
+        return registry, providers
 
     if "fast" not in providers or "strong" not in providers:
         raise ValueError(
@@ -187,7 +211,106 @@ def _build_registry(scenario: EvalScenario) -> ModelRegistry:
         )
     registry.register(ModelProfile("fast", providers["fast"], strength=2, speed=5, cost=1))
     registry.register(ModelProfile("strong", providers["strong"], strength=5, speed=2, cost=5))
-    return registry
+    return registry, providers
+
+
+def _score_tool_exposure(
+    scenario: EvalScenario,
+    providers: dict[str, RecordingScriptedProvider],
+) -> list[EvalCheck]:
+    """Score ``expect.tool_exposure`` rules against recorded provider calls.
+
+    Each rule addresses one ``complete()`` call of one script and asserts which
+    tools were (or were not) advertised — the isolation contract between the
+    planning, implementation, and review roles.
+    """
+
+    rules = scenario.expect.get("tool_exposure", [])
+    if not isinstance(rules, list):
+        return [EvalCheck("tool_exposure", False, "tool_exposure must be a list")]
+    checks: list[EvalCheck] = []
+    for rule in rules:
+        if not isinstance(rule, Mapping):
+            checks.append(EvalCheck("tool_exposure", False, "rule must be a mapping"))
+            continue
+        script = str(rule.get("script", ""))
+        call = int(rule.get("call", 0))
+        provider = providers.get(script)
+        label = f"tool_exposure:{script}[{call}]"
+        if provider is None:
+            checks.append(EvalCheck(label, False, f"unknown script {script!r}"))
+            continue
+        if call >= len(provider.tool_names_per_call):
+            checks.append(
+                EvalCheck(
+                    label,
+                    False,
+                    f"script {script!r} was called {len(provider.tool_names_per_call)} times",
+                )
+            )
+            continue
+        advertised = provider.tool_names_per_call[call]
+        forbidden = {str(name) for name in rule.get("forbids", [])} & advertised
+        missing = {str(name) for name in rule.get("requires", [])} - advertised
+        problems: list[str] = []
+        if forbidden:
+            problems.append(f"forbidden tools advertised: {sorted(forbidden)}")
+        if missing:
+            problems.append(f"required tools missing: {sorted(missing)}")
+        checks.append(EvalCheck(label, not problems, "; ".join(problems)))
+    return checks
+
+
+def _score_script_calls(
+    scenario: EvalScenario,
+    providers: dict[str, RecordingScriptedProvider],
+) -> list[EvalCheck]:
+    """Score ``expect.script_calls``: exact completion-call counts per script.
+
+    This gates cost routing — e.g. asserting the expensive model was never
+    called for a small task.
+    """
+
+    wanted = scenario.expect.get("script_calls", {})
+    if not isinstance(wanted, Mapping):
+        return [EvalCheck("script_calls", False, "script_calls must be a mapping")]
+    checks: list[EvalCheck] = []
+    for name, count in wanted.items():
+        provider = providers.get(str(name))
+        label = f"script_calls:{name}"
+        if provider is None:
+            checks.append(EvalCheck(label, False, f"unknown script {name!r}"))
+            continue
+        actual = len(provider.tool_names_per_call)
+        checks.append(
+            EvalCheck(label, actual == int(count), f"expected {count} call(s), got {actual}")
+        )
+    return checks
+
+
+def _score_script_consumption(
+    scenario: EvalScenario,
+    providers: dict[str, RecordingScriptedProvider],
+) -> list[EvalCheck]:
+    """Fail scenarios that leave scripted steps unconsumed.
+
+    Leftover steps mean the orchestrator skipped expected work (for example a
+    dropped phase), which content-based checks alone can miss.
+    """
+
+    if scenario.allow_unused_scripts:
+        return []
+    checks: list[EvalCheck] = []
+    for name, provider in providers.items():
+        remaining = provider.remaining_steps
+        checks.append(
+            EvalCheck(
+                f"script_consumed:{name}",
+                remaining == 0,
+                f"{remaining} scripted step(s) never consumed",
+            )
+        )
+    return checks
 
 
 def _score(

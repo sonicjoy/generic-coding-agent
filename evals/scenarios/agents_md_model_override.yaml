@@ -24,3 +24,6 @@ expect:
   model_bindings:
     fast: strong
   final_contains: Handled configured workflow.
+  script_calls:
+    fast: 0
+    strong: 1

@@ -1,0 +1,23 @@
+id: feature_budget_exhaustion_pauses
+description: Exhausting the step budget mid-workflow must pause (resumable), never complete.
+task: Implement long-running behavior
+workflow: feature
+max_steps: 1
+allow_unused_scripts: true
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create long.txt in a later phase.
+  fast:
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Should never run within one step.
+expect:
+  status: paused
+  workflow: feature
+  phases:
+    - planning
+  final_contains: Step budget
