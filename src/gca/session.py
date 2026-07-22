@@ -84,6 +84,7 @@ class WorkflowState:
     provider_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     registry_fingerprint: str = ""
     policy_fingerprint: str = ""
+    config_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize workflow state."""
@@ -101,6 +102,7 @@ class WorkflowState:
             "provider_states": self.provider_states,
             "registry_fingerprint": self.registry_fingerprint,
             "policy_fingerprint": self.policy_fingerprint,
+            "config_fingerprint": self.config_fingerprint,
         }
 
     @classmethod
@@ -125,6 +127,7 @@ class WorkflowState:
             provider_states=provider_states,
             registry_fingerprint=str(data.get("registry_fingerprint", "")),
             policy_fingerprint=str(data.get("policy_fingerprint", "")),
+            config_fingerprint=str(data.get("config_fingerprint", "")),
         )
 
 

@@ -1,14 +1,3 @@
----
-gca:
-  workflow: auto
-  models:
-    fast: gpt-5.6-luna
-    planning: claude-opus-4.8
-    implementation: gpt-5.6-luna
-    review: claude-fable-5
-  max_review_cycles: 2
----
-
 # Project agent guidance
 
 Keep changes focused on the task; prefer small, reviewable diffs.
@@ -31,5 +20,5 @@ Keep changes focused on the task; prefer small, reviewable diffs.
 ## Customize for this repo
 
 Edit this file with project-specific conventions (build/test commands, package
-layout, coding standards, areas that must not be touched). Model names under
-`gca.models` must match entries in `models.yaml`.
+layout, coding standards, and areas that must not be touched). Routing and tool
+policy live in `.gca/config.yaml`.

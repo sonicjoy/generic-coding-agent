@@ -14,8 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from gca.frontmatter import FrontmatterError, split_frontmatter
 from gca.tools.base import Tool, ToolContext, ToolResult
 
 _SKILL_FILENAME = "SKILL.md"
@@ -40,13 +39,7 @@ class Skill:
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Split a ``---`` delimited YAML frontmatter block from the body."""
 
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) == 3:
-            meta = yaml.safe_load(parts[1]) or {}
-            if isinstance(meta, dict):
-                return meta, parts[2]
-    return {}, text
+    return split_frontmatter(text)
 
 
 class SkillRegistry:
@@ -122,7 +115,10 @@ def _load_skill_file(path: Path) -> Skill | None:
         text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return None
-    meta, _ = _split_frontmatter(text)
+    try:
+        meta, _ = _split_frontmatter(text)
+    except FrontmatterError:
+        return None
     name = str(meta.get("name") or path.parent.name)
     description = str(meta.get("description") or "").strip()
     return Skill(name=name, description=description, path=path)

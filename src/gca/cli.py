@@ -17,6 +17,7 @@ from gca.model_config import (
 from gca.models import ModelProfile, ModelRegistry
 from gca.plugins import LoadedPlugins, load_plugins
 from gca.providers.scripted import ScriptedProvider
+from gca.repo_config import RepoConfigError, load_repo_config
 from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import SessionStore
 
@@ -27,20 +28,30 @@ def _default_sessions_dir(workspace: Path) -> Path:
 
 def _build_config(args: argparse.Namespace) -> RuntimeConfig:
     workspace = Path(args.workspace).resolve()
+    try:
+        repo_config = load_repo_config(workspace)
+    except RepoConfigError as exc:
+        raise SystemExit(f"Invalid .gca/config.yaml: {exc}") from exc
     sessions_dir = (
         Path(args.sessions_dir) if args.sessions_dir else _default_sessions_dir(workspace)
     )
-    plugins_dir = Path(args.plugins).resolve() if args.plugins else None
-    skill_dirs = [Path(d).resolve() for d in args.skills] if args.skills else None
-    models_paths = [Path(path).resolve() for path in (args.models or [])]
+    plugins_dir = Path(args.plugins).resolve() if args.plugins else repo_config.plugins.directory
+    skill_dirs = (
+        [Path(d).resolve() for d in args.skills] if args.skills else list(repo_config.skill_dirs)
+    )
+    models_paths = [
+        *repo_config.model_paths,
+        *(Path(path).resolve() for path in (args.models or [])),
+    ]
     return RuntimeConfig(
         workspace=workspace,
         sessions_dir=sessions_dir,
         plugins_dir=plugins_dir,
         skill_dirs=skill_dirs,
-        max_steps=args.max_steps,
+        max_steps=args.max_steps or repo_config.runtime.max_steps,
         workflow=args.workflow,
         models_paths=models_paths or None,
+        repo_config=repo_config,
     )
 
 
@@ -144,6 +155,31 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_validate(args: argparse.Namespace) -> int:
+    """Validate effective repository configuration without calling an LLM."""
+
+    config = _build_config(args)
+    loaded = _load_models(args, config)
+    coordinator = create_coordinator(config, loaded.models, loaded_plugins=loaded)
+    missing_models = {
+        role: name
+        for role, name in coordinator.policy.model_preferences.items()
+        if loaded.models.get(name) is None
+    }
+    if missing_models:
+        details = ", ".join(f"{role}={name}" for role, name in sorted(missing_models.items()))
+        raise SystemExit(f"Invalid model bindings: {details}")
+    repo_config = config.repo_config
+    if repo_config is None:
+        raise RuntimeError("repository configuration was not loaded")
+    print(f"configuration valid (version {repo_config.version})")
+    print(f"models: {', '.join(loaded.models.names())}")
+    print(f"skills: {', '.join(config.skill_dirs and [str(path) for path in config.skill_dirs] or [])}")
+    print(f"tools: {', '.join(coordinator.tools.names())}")
+    print(f"profile: {repo_config.runtime.profile}")
+    return 0
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", default=".", help="Workspace root (default: cwd).")
     parser.add_argument("--sessions-dir", default=None, help="Where to store sessions.")
@@ -157,7 +193,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--skills", action="append", default=None, help="Skill directory (repeatable)."
     )
-    parser.add_argument("--max-steps", type=int, default=25, help="Max agent steps.")
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Max agent steps (default: repository config or 25).",
+    )
     parser.add_argument(
         "--workflow",
         choices=["auto", "fast", "feature"],
@@ -184,6 +225,10 @@ def build_parser() -> argparse.ArgumentParser:
     sessions = sub.add_parser("sessions", help="List saved sessions.")
     _add_common(sessions)
     sessions.set_defaults(func=_cmd_sessions)
+
+    validate = sub.add_parser("validate", help="Validate repository configuration offline.")
+    _add_common(validate)
+    validate.set_defaults(func=_cmd_validate)
 
     return parser
 

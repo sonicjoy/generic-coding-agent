@@ -8,6 +8,7 @@ from pathlib import Path
 from gca.agent import Agent, AgentConfig, AgentResult
 from gca.complexity import classify_task
 from gca.models import ModelProfile, ModelRegistry
+from gca.personas import PersonaSet
 from gca.providers.base import Message
 from gca.routing import WORKFLOW_FAST, RoutingPolicy
 from gca.session import (
@@ -70,6 +71,8 @@ class RunCoordinator:
         policy: RoutingPolicy,
         tools: ToolRegistry,
         system_prompt: str,
+        personas: PersonaSet | None = None,
+        config_fingerprint: str = "",
         on_event: EventHook | None = None,
     ) -> None:
         self.workspace = workspace
@@ -79,6 +82,8 @@ class RunCoordinator:
         self.policy = policy
         self.tools = tools
         self.system_prompt = system_prompt
+        self.personas = personas or PersonaSet()
+        self.config_fingerprint = config_fingerprint
         self.on_event = on_event
 
     def run(self, session: Session, store: SessionStore) -> AgentResult:
@@ -135,6 +140,7 @@ class RunCoordinator:
             model_bindings=bindings,
             registry_fingerprint=self.models.fingerprint(),
             policy_fingerprint=self.policy.fingerprint(),
+            config_fingerprint=self.config_fingerprint,
         )
         if workflow_name != WORKFLOW_FAST and not session.messages:
             session.messages.append(Message(role="user", content=session.task))
@@ -170,6 +176,11 @@ class RunCoordinator:
             self._emit("[routing] warning: registered model metadata changed since session start")
         if workflow.policy_fingerprint and workflow.policy_fingerprint != self.policy.fingerprint():
             self._emit("[routing] warning: AGENTS.md routing changed; using saved model bindings")
+        if (
+            workflow.config_fingerprint
+            and workflow.config_fingerprint != self.config_fingerprint
+        ):
+            self._emit("[routing] warning: repository configuration changed since session start")
         needed_roles = self._needed_model_roles(workflow)
         for role in needed_roles:
             model_name = workflow.model_bindings[role]
@@ -374,26 +385,7 @@ class RunCoordinator:
         return registry
 
     def _phase_system_prompt(self, phase: str) -> str:
-        if phase == "planning":
-            role = (
-                "You are the planning agent in a multi-agent feature workflow. Inspect the "
-                "workspace with read-only tools. Do not edit files or run commands. Produce "
-                "a concrete implementation and verification plan, then call finish(plan=...)."
-            )
-        elif phase == "implementation":
-            role = (
-                "You are the implementation agent in a multi-agent feature workflow. Follow "
-                "the approved plan and any review feedback. Edit only what the task requires, "
-                "run relevant checks, and call finish(summary=...) when implementation is ready "
-                "for independent review."
-            )
-        else:
-            role = (
-                "You are the independent review agent in a multi-agent feature workflow. "
-                "Do not modify files. Inspect the implementation and run relevant checks. "
-                "Call finish(verdict='approved'|'changes_requested', summary=...) with concrete "
-                "evidence or actionable findings."
-            )
+        role = self.personas.for_phase(phase)
         return f"{self.system_prompt}\n\nWorkflow role:\n{role}"
 
     def _phase_user_prompt(self, session: Session, phase: str) -> str:

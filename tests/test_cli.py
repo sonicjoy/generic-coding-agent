@@ -75,3 +75,29 @@ models:
     )
     loaded = _load_models(args, _build_config(args))
     assert loaded.models.names() == ["cheap"]
+
+
+def test_cli_validate_uses_manifest_without_model_call(
+    tmp_path: Path, capsys: object
+) -> None:
+    gca_dir = tmp_path / ".gca"
+    gca_dir.mkdir()
+    (gca_dir / "config.yaml").write_text(
+        "version: 1\nruntime:\n  max_steps: 12\n",
+        encoding="utf-8",
+    )
+    script = tmp_path / "script.json"
+    script.write_text("[]", encoding="utf-8")
+
+    result = main(
+        [
+            "validate",
+            "--workspace",
+            str(tmp_path),
+            "--script",
+            str(script),
+        ]
+    )
+
+    assert result == 0
+    assert "configuration valid" in capsys.readouterr().out  # type: ignore[attr-defined]

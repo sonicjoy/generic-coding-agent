@@ -55,6 +55,18 @@ def test_loads_and_merges_gca_frontmatter_root_first(tmp_path: Path) -> None:
     prompt = build_context_prompt(tmp_path)
     assert "root rules" in prompt
     assert "package rules" in prompt
+    assert "gca:" not in prompt
+
+
+def test_can_preserve_frontmatter_for_legacy_prompt(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text(
+        "---\ngca:\n  workflow: fast\n---\nRules.\n",
+        encoding="utf-8",
+    )
+
+    prompt = build_context_prompt(tmp_path, include_frontmatter=True)
+
+    assert "gca:" in prompt
 
 
 def test_rejects_invalid_gca_frontmatter(tmp_path: Path) -> None:
