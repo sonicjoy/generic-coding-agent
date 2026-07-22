@@ -1,0 +1,56 @@
+id: feature_rework_exhausted_fails
+description: Repeated review rejections beyond max_review_cycles must fail the session.
+task: Implement stubborn behavior
+workflow: feature
+max_steps: 12
+agents_md: |
+  ---
+  gca:
+    max_review_cycles: 1
+  ---
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create stubborn.txt containing right.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: changes_requested
+            summary: stubborn.txt is still wrong.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: changes_requested
+            summary: stubborn.txt is wrong again.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: stubborn.txt
+            content: wrong
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Created stubborn.txt.
+    - tool_calls:
+        - name: write_file
+          arguments:
+            path: stubborn.txt
+            content: still wrong
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Attempted a fix.
+expect:
+  status: failed
+  workflow: feature
+  review_cycles: 1
+  phases:
+    - planning
+    - implementation
+    - review
+    - implementation
+    - review
+  final_contains: rework cycles

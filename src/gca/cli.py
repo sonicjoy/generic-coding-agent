@@ -7,10 +7,17 @@ import json
 import sys
 from pathlib import Path
 
-from gca.plugins import load_plugins
-from gca.providers.base import LLMProvider
+from gca.model_config import (
+    ModelConfigError,
+    build_registry_from_catalog,
+    default_model_config_paths,
+    load_dotenv,
+    load_model_catalog,
+)
+from gca.models import ModelProfile, ModelRegistry
+from gca.plugins import LoadedPlugins, load_plugins
 from gca.providers.scripted import ScriptedProvider
-from gca.runtime import RuntimeConfig, create_agent
+from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import SessionStore
 
 
@@ -25,27 +32,60 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
     )
     plugins_dir = Path(args.plugins).resolve() if args.plugins else None
     skill_dirs = [Path(d).resolve() for d in args.skills] if args.skills else None
+    models_paths = [Path(path).resolve() for path in (args.models or [])]
     return RuntimeConfig(
         workspace=workspace,
         sessions_dir=sessions_dir,
         plugins_dir=plugins_dir,
         skill_dirs=skill_dirs,
         max_steps=args.max_steps,
+        workflow=args.workflow,
+        models_paths=models_paths or None,
     )
 
 
-def _load_provider(args: argparse.Namespace, config: RuntimeConfig) -> LLMProvider:
-    if config.plugins_dir is not None:
-        loaded = load_plugins(config.plugins_dir)
-        if loaded.provider is not None:
-            return loaded.provider
-    if args.script:
+def _load_dotenv_files(config: RuntimeConfig) -> None:
+    load_dotenv(Path.home() / ".gca" / ".env")
+    load_dotenv(config.workspace / ".env")
+    load_dotenv(config.workspace / ".gca" / ".env")
+
+
+def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugins:
+    _load_dotenv_files(config)
+    loaded = load_plugins(config.plugins_dir) if config.plugins_dir is not None else LoadedPlugins()
+
+    catalog_paths = list(default_model_config_paths(config.workspace))
+    if config.models_paths:
+        catalog_paths.extend(config.models_paths)
+    try:
+        catalog = load_model_catalog(catalog_paths)
+        catalog_models = build_registry_from_catalog(catalog)
+    except ModelConfigError as exc:
+        raise SystemExit(f"Invalid models.yaml: {exc}") from exc
+
+    # YAML first; plugins override same-named models as an escape hatch.
+    merged = ModelRegistry()
+    merged.extend(catalog_models)
+    merged.extend(loaded.models)
+    loaded.models = merged
+
+    if len(loaded.models) == 0 and args.script:
         data = json.loads(Path(args.script).read_text(encoding="utf-8"))
-        return ScriptedProvider.from_script(data)
+        provider = ScriptedProvider.from_script(data)
+        loaded.models.register(
+            ModelProfile(
+                name="scripted",
+                provider=provider,
+                strength=3,
+                speed=5,
+                cost=1,
+            )
+        )
+    if len(loaded.models) > 0:
+        return loaded
     raise SystemExit(
-        "No LLM provider configured. Either supply a plugin directory (--plugins) "
-        "whose module defines get_provider(), or use --script PATH to drive the "
-        "built-in scripted provider (useful for demos and tests)."
+        "No models configured. Add a models.yaml catalog, supply --plugins with "
+        "get_models()/get_provider(), or use --script PATH for the scripted provider."
     )
 
 
@@ -56,11 +96,16 @@ def _event_printer(message: str) -> None:
 def _cmd_run(args: argparse.Namespace) -> int:
     config = _build_config(args)
     store = SessionStore(config.sessions_dir)
-    provider = _load_provider(args, config)
+    loaded = _load_models(args, config)
     session = store.create(args.task)
     print(f"session: {session.id}", file=sys.stderr)
-    agent = create_agent(config, provider, session, store, on_event=_event_printer)
-    result = agent.run()
+    coordinator = create_coordinator(
+        config,
+        loaded.models,
+        loaded_plugins=loaded,
+        on_event=_event_printer,
+    )
+    result = coordinator.run(session, store)
     print(f"\nstatus: {result.status} (steps: {result.steps})")
     print(result.final_message)
     return 0 if result.status == "completed" else 1
@@ -69,11 +114,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
 def _cmd_resume(args: argparse.Namespace) -> int:
     config = _build_config(args)
     store = SessionStore(config.sessions_dir)
-    provider = _load_provider(args, config)
+    loaded = _load_models(args, config)
     session = store.load(args.session_id)
     print(f"resuming session: {session.id}", file=sys.stderr)
-    agent = create_agent(config, provider, session, store, on_event=_event_printer)
-    result = agent.run()
+    coordinator = create_coordinator(
+        config,
+        loaded.models,
+        loaded_plugins=loaded,
+        on_event=_event_printer,
+    )
+    result = coordinator.run(session, store)
     print(f"\nstatus: {result.status} (steps: {result.steps})")
     print(result.final_message)
     return 0 if result.status == "completed" else 1
@@ -99,9 +149,21 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sessions-dir", default=None, help="Where to store sessions.")
     parser.add_argument("--plugins", default=None, help="Directory of plugin modules.")
     parser.add_argument(
+        "--models",
+        action="append",
+        default=None,
+        help="Extra models.yaml path (repeatable; later files override earlier ones).",
+    )
+    parser.add_argument(
         "--skills", action="append", default=None, help="Skill directory (repeatable)."
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Max agent steps.")
+    parser.add_argument(
+        "--workflow",
+        choices=["auto", "fast", "feature"],
+        default=None,
+        help="Override workflow selection (default: AGENTS.md or auto).",
+    )
     parser.add_argument("--script", default=None, help="JSON script for the scripted provider.")
 
 

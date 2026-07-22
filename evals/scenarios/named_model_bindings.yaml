@@ -1,0 +1,60 @@
+id: named_model_bindings
+description: AGENTS.md role preferences should bind named registered models to feature roles.
+task: Implement named-model routing
+workflow: feature
+max_steps: 8
+model_profiles:
+  - name: gpt-5.6-luna
+    script: luna
+    strength: 3
+    speed: 5
+    cost: 1
+  - name: claude-opus-4.8
+    script: opus
+    strength: 5
+    speed: 2
+    cost: 5
+agents_md: |
+  ---
+  gca:
+    workflow: feature
+    models:
+      planning: claude-opus-4.8
+      implementation: gpt-5.6-luna
+      review: claude-opus-4.8
+  ---
+scripts:
+  opus:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create routed.txt with ok.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Named model routing verified.
+  luna:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: routed.txt
+            content: ok
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Wrote routed.txt.
+expect:
+  status: completed
+  workflow: feature
+  model_bindings:
+    planning: claude-opus-4.8
+    implementation: gpt-5.6-luna
+    review: claude-opus-4.8
+  models:
+    - claude-opus-4.8
+    - gpt-5.6-luna
+    - claude-opus-4.8
+  files:
+    routed.txt:
+      equals: ok

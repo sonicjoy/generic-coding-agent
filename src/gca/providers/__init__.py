@@ -1,13 +1,14 @@
 """LLM provider abstraction and built-in providers.
 
 The harness is provider-agnostic: it depends only on the :class:`LLMProvider`
-interface defined in :mod:`gca.providers.base`. Users wire in their own provider
-(OpenAI, Anthropic, a local model, etc.) by implementing that interface and
-registering it via a plugin. A deterministic :class:`ScriptedProvider` is shipped
-for testing and demos so the harness can run end-to-end without any credentials.
+interface defined in :mod:`gca.providers.base`. Built-in options include an
+OpenAI-compatible HTTP client (for OpenRouter, OpenAI, Groq, Ollama, etc.) and a
+deterministic :class:`ScriptedProvider` for offline demos/tests. Custom backends
+can still be registered via plugins.
 """
 
 from gca.providers.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
+from gca.providers.openai_compatible import OpenAICompatibleProvider
 from gca.providers.scripted import ScriptedProvider
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "Message",
     "ToolCall",
     "ToolSpec",
+    "OpenAICompatibleProvider",
     "ScriptedProvider",
 ]

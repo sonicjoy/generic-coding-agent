@@ -95,3 +95,17 @@ class LLMProvider(ABC):
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         """Produce the next assistant response given the conversation and tools."""
         raise NotImplementedError
+
+    def get_state(self) -> dict[str, Any]:
+        """Return JSON-serializable provider state needed to resume, if any."""
+
+        return {}
+
+    def set_state(self, state: dict[str, Any]) -> None:
+        """Restore state returned by :meth:`get_state`.
+
+        Network-backed providers are normally stateless and can use this default
+        implementation. Deterministic or local providers may override it.
+        """
+
+        return None

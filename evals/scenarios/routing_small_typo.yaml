@@ -1,0 +1,21 @@
+id: routing_small_typo
+description: Small typo tasks should select the fast single-agent workflow.
+task: Fix a typo in README.md
+max_steps: 3
+scripts:
+  fast:
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Fixed the typo.
+  strong: []
+expect:
+  status: completed
+  workflow: fast
+  complexity: small
+  active_model: fast
+  final_contains: Fixed the typo.
+  max_steps: 3
+  script_calls:
+    fast: 1
+    strong: 0

@@ -1,0 +1,54 @@
+id: feature_review_rework
+description: Reviewer can request changes and implementation must rework once.
+task: Implement value behavior
+workflow: feature
+max_steps: 12
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create value.txt containing corrected.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: changes_requested
+            summary: value.txt should contain corrected.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Correction verified.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: value.txt
+            content: wrong
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Created value.txt.
+    - tool_calls:
+        - name: write_file
+          arguments:
+            path: value.txt
+            content: corrected
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Applied review feedback.
+expect:
+  status: completed
+  workflow: feature
+  review_cycles: 1
+  phases:
+    - planning
+    - implementation
+    - review
+    - implementation
+    - review
+  files:
+    value.txt:
+      equals: corrected
+  final_contains: Correction verified.

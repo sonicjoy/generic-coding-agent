@@ -1,0 +1,68 @@
+id: feature_greeting
+description: Feature workflow should hand off planner to implementer to reviewer.
+task: Implement greeting behavior
+workflow: feature
+max_steps: 10
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create greeting.py returning Hello, {name}! and verify it.
+    - tool_calls:
+        - name: run_command
+          arguments:
+            command: python -c "import greeting; assert greeting.greet('Ada') == 'Hello, Ada!'"
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Greeting behavior verified.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: greeting.py
+            content: |
+              def greet(name):
+                  """Return a greeting."""
+                  return f"Hello, {name}!"
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Implemented greeting.py.
+expect:
+  status: completed
+  workflow: feature
+  phases:
+    - planning
+    - implementation
+    - review
+  models:
+    - strong
+    - fast
+    - strong
+  plan_contains: greeting.py
+  files:
+    greeting.py:
+      contains: def greet
+  final_contains: Greeting behavior verified.
+  tool_exposure:
+    # Planner (strong call 0) is read-only: no editing or command execution.
+    - script: strong
+      call: 0
+      forbids: [create_file, write_file, apply_patch, delete_file, move_file, run_command]
+      requires: [explore, read_file, search, finish]
+    # Reviewer (strong calls 1-2) may run checks but never edit files.
+    - script: strong
+      call: 1
+      forbids: [create_file, write_file, apply_patch, delete_file, move_file]
+      requires: [run_command, read_file, finish]
+    - script: strong
+      call: 2
+      forbids: [create_file, write_file, apply_patch, delete_file, move_file]
+      requires: [run_command]
+    # Implementer (fast call 0) gets the full editing toolset.
+    - script: fast
+      call: 0
+      requires: [create_file, write_file, apply_patch, run_command, finish]

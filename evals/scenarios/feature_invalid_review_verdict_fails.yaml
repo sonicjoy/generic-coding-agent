@@ -1,0 +1,33 @@
+id: feature_invalid_review_verdict_fails
+description: A reviewer that skips the structured verdict must fail the session, not complete it.
+task: Implement verdictless behavior
+workflow: feature
+max_steps: 8
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create checked.txt containing ok.
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Looks fine to me.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: checked.txt
+            content: ok
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Created checked.txt.
+expect:
+  status: failed
+  workflow: feature
+  phases:
+    - planning
+    - implementation
+    - review
+  final_contains: structured verdict

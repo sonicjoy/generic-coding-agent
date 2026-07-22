@@ -1,0 +1,29 @@
+id: agents_md_model_override
+description: AGENTS.md can force the fast workflow onto a stronger registered model.
+task: Add a new feature
+max_steps: 4
+agents_md: |
+  ---
+  gca:
+    workflow: fast
+    models:
+      fast: strong
+  ---
+  Follow project rules.
+scripts:
+  fast: []
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Handled configured workflow.
+expect:
+  status: completed
+  workflow: fast
+  active_model: strong
+  model_bindings:
+    fast: strong
+  final_contains: Handled configured workflow.
+  script_calls:
+    fast: 0
+    strong: 1
