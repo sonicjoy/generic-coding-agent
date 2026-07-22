@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from gca.integrations.scm import ChangeRequest, PublicationController, PublicationError
+from gca.jobs.models import Job, PublicationTarget, RepositorySpec, RunSpec
+
+
+class FakeAdapter:
+    provider = "fake"
+
+    def __init__(self) -> None:
+        self.pushed: list[str] = []
+        self.requests: list[ChangeRequest] = []
+
+    def push(self, workspace: Path, branch: str) -> None:
+        self.pushed.append(branch)
+
+    def open_change_request(self, request: ChangeRequest) -> str:
+        self.requests.append(request)
+        return "https://scm.example/change/1"
+
+
+def _git(workspace: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _repository(tmp_path: Path) -> Path:
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    _git(repository, "config", "user.email", "tests@example.test")
+    _git(repository, "config", "user.name", "Tests")
+    config_dir = repository / ".gca"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        """
+version: 1
+tools:
+  fixed_commands:
+    verify:
+      argv: [python, -c, "print('verified')"]
+publication:
+  required_checks: [verify]
+  allowed_paths: ["src/**"]
+  max_files: 5
+  max_changed_lines: 20
+""",
+        encoding="utf-8",
+    )
+    (repository / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Initial")
+    return repository
+
+
+def _job(repository: Path) -> Job:
+    return Job(
+        id="a" * 32,
+        run_spec=RunSpec(
+            task="Add a useful change",
+            repository=RepositorySpec(str(repository), ref="main"),
+            publication=PublicationTarget(provider="fake", base_ref="main"),
+        ),
+        session_id="session-1",
+    )
+
+
+def test_controller_checks_commits_pushes_and_opens_change_request(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    source = repository / "src"
+    source.mkdir()
+    (source / "change.py").write_text("VALUE = 1\n", encoding="utf-8")
+    adapter = FakeAdapter()
+
+    result = PublicationController({"fake": adapter}).publish(_job(repository), repository)
+
+    assert result["change_request_url"] == "https://scm.example/change/1"
+    assert result["branch"] == "gca/aaaaaaaaaaaa"
+    assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
+    assert adapter.requests[0].target_branch == "main"
+    assert _git(repository, "log", "-1", "--pretty=%s") == "gca: Add a useful change"
+
+
+def test_controller_skips_empty_change_request(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    adapter = FakeAdapter()
+
+    result = PublicationController({"fake": adapter}).publish(_job(repository), repository)
+
+    assert result["no_changes"] is True
+    assert adapter.pushed == []
+    assert adapter.requests == []
+
+
+def test_controller_rejects_disallowed_paths(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    (repository / ".env").write_text("SECRET=value\n", encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="denied path"):
+        PublicationController({"fake": FakeAdapter()}).publish(_job(repository), repository)

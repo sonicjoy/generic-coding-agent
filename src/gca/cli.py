@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from gca.integrations.scm import PublicationPolicy
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
 from gca.jobs.queue import SqliteJobQueue
 from gca.jobs.runner import JobRunner
@@ -132,6 +133,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     repo_config = config.repo_config
     if repo_config is None:
         raise RuntimeError("repository configuration was not loaded")
+    PublicationPolicy.from_mapping(repo_config.publication)
     print(f"configuration valid (version {repo_config.version})")
     print(f"models: {', '.join(loaded.models.names())}")
     skill_paths = [str(path) for path in config.skill_dirs or []]
