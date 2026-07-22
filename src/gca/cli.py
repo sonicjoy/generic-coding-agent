@@ -7,7 +7,14 @@ import json
 import sys
 from pathlib import Path
 
-from gca.models import ModelProfile
+from gca.model_config import (
+    ModelConfigError,
+    build_registry_from_catalog,
+    default_model_config_paths,
+    load_dotenv,
+    load_model_catalog,
+)
+from gca.models import ModelProfile, ModelRegistry
 from gca.plugins import LoadedPlugins, load_plugins
 from gca.providers.scripted import ScriptedProvider
 from gca.runtime import RuntimeConfig, create_coordinator
@@ -25,6 +32,7 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
     )
     plugins_dir = Path(args.plugins).resolve() if args.plugins else None
     skill_dirs = [Path(d).resolve() for d in args.skills] if args.skills else None
+    models_paths = [Path(path).resolve() for path in (args.models or [])]
     return RuntimeConfig(
         workspace=workspace,
         sessions_dir=sessions_dir,
@@ -32,11 +40,35 @@ def _build_config(args: argparse.Namespace) -> RuntimeConfig:
         skill_dirs=skill_dirs,
         max_steps=args.max_steps,
         workflow=args.workflow,
+        models_paths=models_paths or None,
     )
 
 
+def _load_dotenv_files(config: RuntimeConfig) -> None:
+    load_dotenv(Path.home() / ".gca" / ".env")
+    load_dotenv(config.workspace / ".env")
+    load_dotenv(config.workspace / ".gca" / ".env")
+
+
 def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugins:
+    _load_dotenv_files(config)
     loaded = load_plugins(config.plugins_dir) if config.plugins_dir is not None else LoadedPlugins()
+
+    catalog_paths = list(default_model_config_paths(config.workspace))
+    if config.models_paths:
+        catalog_paths.extend(config.models_paths)
+    try:
+        catalog = load_model_catalog(catalog_paths)
+        catalog_models = build_registry_from_catalog(catalog)
+    except ModelConfigError as exc:
+        raise SystemExit(f"Invalid models.yaml: {exc}") from exc
+
+    # YAML first; plugins override same-named models as an escape hatch.
+    merged = ModelRegistry()
+    merged.extend(catalog_models)
+    merged.extend(loaded.models)
+    loaded.models = merged
+
     if len(loaded.models) == 0 and args.script:
         data = json.loads(Path(args.script).read_text(encoding="utf-8"))
         provider = ScriptedProvider.from_script(data)
@@ -52,9 +84,8 @@ def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugi
     if len(loaded.models) > 0:
         return loaded
     raise SystemExit(
-        "No models configured. Supply a plugin directory (--plugins) whose modules "
-        "define get_models() or get_provider(), or use --script PATH to drive the "
-        "built-in scripted provider."
+        "No models configured. Add a models.yaml catalog, supply --plugins with "
+        "get_models()/get_provider(), or use --script PATH for the scripted provider."
     )
 
 
@@ -117,6 +148,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", default=".", help="Workspace root (default: cwd).")
     parser.add_argument("--sessions-dir", default=None, help="Where to store sessions.")
     parser.add_argument("--plugins", default=None, help="Directory of plugin modules.")
+    parser.add_argument(
+        "--models",
+        action="append",
+        default=None,
+        help="Extra models.yaml path (repeatable; later files override earlier ones).",
+    )
     parser.add_argument(
         "--skills", action="append", default=None, help="Skill directory (repeatable)."
     )

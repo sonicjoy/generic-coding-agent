@@ -77,6 +77,12 @@ class ModelRegistry:
 
         self._models[profile.name] = profile
 
+    def extend(self, other: ModelRegistry) -> None:
+        """Register all profiles from ``other``, replacing same-named entries."""
+
+        for profile in other.profiles():
+            self.register(profile)
+
     def get(self, name: str) -> ModelProfile | None:
         """Return a named profile, if registered."""
 

@@ -42,6 +42,7 @@ class RuntimeConfig:
     skill_dirs: list[Path] | None = None
     max_steps: int = 25
     workflow: str | None = None
+    models_paths: list[Path] | None = None
 
 
 def default_skill_dirs(workspace: Path) -> list[Path]:

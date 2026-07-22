@@ -15,8 +15,15 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Agent runtime state
-.gca/
+# Agent runtime state (keep models.yaml shareable)
+.gca/*
+!.gca/models.yaml
+
+# Local secrets (never commit)
+.env
+.env.*
+!.env.example
+
 
 # OS / editor
 .DS_Store
