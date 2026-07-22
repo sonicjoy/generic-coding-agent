@@ -28,7 +28,7 @@ def prepare_repository(
 ) -> Path:
     """Clone ``spec`` using argv execution and return the checkout path."""
 
-    _validate_repository(spec, allowed_hosts=allowed_hosts, allow_local=allow_local)
+    validate_repository_spec(spec, allowed_hosts=allowed_hosts, allow_local=allow_local)
     destination = Path(destination).resolve()
     if (destination / ".git").is_dir():
         return destination
@@ -65,12 +65,14 @@ def prepare_repository(
     return destination
 
 
-def _validate_repository(
+def validate_repository_spec(
     spec: RepositorySpec,
     *,
     allowed_hosts: frozenset[str],
     allow_local: bool,
 ) -> None:
+    """Validate repository URL, ref, depth, and host policy without cloning."""
+
     if not spec.url.strip():
         raise WorkspaceError("repository URL must not be empty")
     if not spec.ref.strip() or spec.ref.startswith("-"):

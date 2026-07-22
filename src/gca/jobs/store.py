@@ -90,13 +90,14 @@ class SqliteJobStore:
                 connection.execute(
                     """
                     INSERT INTO jobs (
-                        id, idempotency_key, status, data, version, not_before,
+                        id, idempotency_key, repository_url, status, data, version, not_before,
                         lease_owner, lease_expires_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job.id,
                         job.idempotency_key,
+                        job.run_spec.repository.url,
                         job.status.value,
                         payload,
                         job.version,
@@ -194,12 +195,23 @@ class SqliteJobStore:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT data FROM jobs
-                WHERE status = ? AND not_before <= ?
-                ORDER BY created_at ASC
+                SELECT queued.data FROM jobs AS queued
+                WHERE queued.status = ? AND queued.not_before <= ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM jobs AS active
+                    WHERE active.repository_url = queued.repository_url
+                      AND active.id != queued.id
+                      AND active.status IN (?, ?)
+                  )
+                ORDER BY queued.created_at ASC
                 LIMIT 1
                 """,
-                (JobStatus.QUEUED.value, now),
+                (
+                    JobStatus.QUEUED.value,
+                    now,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
+                ),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -282,6 +294,16 @@ class SqliteJobStore:
             connection.commit()
         return count
 
+    def renew_lease(self, job_id: str, worker_id: str, *, lease_seconds: int) -> Job:
+        """Extend a running job lease held by ``worker_id``."""
+
+        job = self.load(job_id)
+        if job.status != JobStatus.RUNNING or job.lease_owner != worker_id:
+            raise JobConcurrencyError(f"worker does not hold running job lease: {job_id}")
+        job.lease_expires_at = time.time() + lease_seconds
+        self.save(job)
+        return job
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.executescript(
@@ -290,6 +312,7 @@ class SqliteJobStore:
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
                     idempotency_key TEXT UNIQUE,
+                    repository_url TEXT NOT NULL,
                     status TEXT NOT NULL,
                     data TEXT NOT NULL,
                     version INTEGER NOT NULL,
@@ -303,6 +326,20 @@ class SqliteJobStore:
                     ON jobs(status, not_before, created_at);
                 CREATE INDEX IF NOT EXISTS jobs_lease
                     ON jobs(status, lease_expires_at);
+                """
+            )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "repository_url" not in columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN repository_url TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS jobs_repository_status
+                    ON jobs(repository_url, status)
                 """
             )
 

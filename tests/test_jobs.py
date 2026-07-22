@@ -77,3 +77,23 @@ def test_lifecycle_rejects_invalid_transition(tmp_path: Path) -> None:
 
     with pytest.raises(JobTransitionError):
         transition_job(job, JobStatus.COMPLETED)
+
+
+def test_queue_serializes_jobs_for_same_repository(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    first = store.create(_spec("First task"))
+    second = store.create(_spec("Second task"))
+    queue.enqueue(first.id)
+    queue.enqueue(second.id)
+
+    active = queue.claim("worker-a")
+    blocked = queue.claim("worker-b")
+
+    assert active is not None
+    assert blocked is None
+    transition_job(active, JobStatus.COMPLETED)
+    store.save(active)
+    next_job = queue.claim("worker-b")
+    assert next_job is not None
+    assert next_job.id == second.id

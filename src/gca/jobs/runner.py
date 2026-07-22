@@ -29,6 +29,7 @@ class Publisher(Protocol):
 
 
 RuntimeModelLoader = Callable[[RuntimeConfig], LoadedPlugins]
+LeaseHeartbeat = Callable[[Job], None]
 
 
 class JobRunner:
@@ -48,6 +49,7 @@ class JobRunner:
         skill_dirs: list[Path] | None = None,
         model_paths: list[Path] | None = None,
         on_event: EventHook | None = None,
+        lease_heartbeat: LeaseHeartbeat | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
@@ -60,6 +62,7 @@ class JobRunner:
         self.skill_dirs = skill_dirs
         self.model_paths = model_paths
         self.on_event = on_event
+        self.lease_heartbeat = lease_heartbeat
 
     def execute(self, job: Job) -> Job:
         """Run a claimed job to a durable terminal, paused, or retry state."""
@@ -69,6 +72,7 @@ class JobRunner:
         layout = JobWorkspace.under(self.workspace_root, job.id)
         layout.ensure_metadata()
         try:
+            self._heartbeat(job)
             repository = prepare_repository(
                 job.run_spec.repository,
                 layout.repository,
@@ -78,6 +82,7 @@ class JobRunner:
             )
             job.workspace_path = str(repository)
             self.store.save(job)
+            self._heartbeat(job)
             result = self._run_agent(job, layout)
             self._apply_result(job, result, repository)
         except Exception as exc:
@@ -114,7 +119,7 @@ class JobRunner:
             runtime,
             loaded.models,
             loaded_plugins=loaded,
-            on_event=self.on_event,
+            on_event=lambda message: self._on_agent_event(job, message),
         )
         return coordinator.run(session, sessions)
 
@@ -156,3 +161,12 @@ class JobRunner:
         else:
             transition_job(job, JobStatus.FAILED, error=message)
         self.store.save(job)
+
+    def _heartbeat(self, job: Job) -> None:
+        if self.lease_heartbeat is not None:
+            self.lease_heartbeat(job)
+
+    def _on_agent_event(self, job: Job, message: str) -> None:
+        self._heartbeat(job)
+        if self.on_event is not None:
+            self.on_event(message)
