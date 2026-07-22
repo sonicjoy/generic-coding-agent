@@ -87,11 +87,14 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
             "issue": {"number": 5, "title": "Fix issue", "body": "Details"},
         }
     ).encode()
-    signature = "sha256=" + hmac.new(
-        b"webhook-secret",
-        body,
-        hashlib.sha256,
-    ).hexdigest()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
     headers = {
         "X-GitHub-Event": "issues",
         "X-GitHub-Delivery": "delivery-1",

@@ -329,8 +329,7 @@ class SqliteJobStore:
                 """
             )
             columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+                str(row["name"]) for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
             }
             if "repository_url" not in columns:
                 connection.execute(

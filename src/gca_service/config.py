@@ -70,9 +70,7 @@ class ServiceSettings:
                 "GCA_POLL_SECONDS",
             ),
             worker_id=values.get("GCA_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}",
-            allow_local_repositories=_boolean(
-                values.get("GCA_ALLOW_LOCAL_REPOSITORIES", "false")
-            ),
+            allow_local_repositories=_boolean(values.get("GCA_ALLOW_LOCAL_REPOSITORIES", "false")),
             max_request_bytes=_integer(
                 values.get("GCA_MAX_REQUEST_BYTES", "1000000"),
                 "GCA_MAX_REQUEST_BYTES",

@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from gca.integrations.github import GitHubScmAdapter
 from gca.integrations.gitlab import GitLabScmAdapter
-from gca.integrations.scm import PublicationController
+from gca.integrations.scm import PublicationController, ScmAdapter
 from gca.jobs.models import Job
 from gca.jobs.runner import JobRunner, RuntimeModelLoader
 from gca_service.state import ServiceState
@@ -74,7 +74,7 @@ class ServiceWorker:
 
 def _publisher(state: ServiceState) -> PublicationController | None:
     settings = state.settings
-    adapters = {}
+    adapters: dict[str, ScmAdapter] = {}
     if settings.github_token:
         adapters["github"] = GitHubScmAdapter(
             settings.github_token,
