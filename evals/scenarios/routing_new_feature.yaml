@@ -1,0 +1,45 @@
+id: routing_new_feature
+description: New-feature wording should auto-select the multi-agent feature workflow.
+task: Add a new feature for saved searches across the API and UI
+workflow: null
+max_steps: 8
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create search_history.py and verify it.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Search history feature verified.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: search_history.py
+            content: |
+              def save(query):
+                  return {"saved": query}
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Implemented search_history.py.
+expect:
+  status: completed
+  workflow: feature
+  complexity: medium
+  phases:
+    - planning
+    - implementation
+    - review
+  models:
+    - strong
+    - fast
+    - strong
+  files:
+    search_history.py:
+      contains: def save
+  plan_contains: search_history.py
+  final_contains: verified

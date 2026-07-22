@@ -42,9 +42,7 @@ def test_cli_runs_fast_scripted_workflow(tmp_path: Path) -> None:
     assert result == 0
 
 
-def test_cli_loads_models_yaml_without_plugins(
-    tmp_path: Path, monkeypatch: object
-) -> None:
+def test_cli_loads_models_yaml_without_plugins(tmp_path: Path, monkeypatch: object) -> None:
     catalog = tmp_path / "models.yaml"
     catalog.write_text(
         """

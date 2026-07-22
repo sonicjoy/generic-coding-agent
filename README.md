@@ -178,8 +178,13 @@ gca run "Add search history" --workflow feature
 ruff check .          # lint
 ruff format --check . # format check
 mypy                  # type check
-pytest                # tests
+pytest                # unit + offline evals
+pytest -m eval        # evaluation scenarios only
 ```
+
+Offline eval scenarios live under ``evals/scenarios/`` and are driven by
+scripted models (no network). Add a YAML scenario there to cover a new
+workflow or routing behavior.
 
 ## Layout
 
@@ -200,5 +205,6 @@ src/gca/
   providers/     LLMProvider, OpenAI-compatible, ScriptedProvider
   tools/         built-in tools (filesystem, search, patch, shell, control)
 examples/        example skill, plugin, and models.yaml
+evals/           offline deterministic evaluation scenarios
 tests/           pytest suite
 ```

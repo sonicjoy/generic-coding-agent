@@ -29,14 +29,17 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "evals"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "evals"]
 addopts = "-q"
+markers = [
+    "eval: offline deterministic evaluation scenarios",
+]
 
 [tool.mypy]
 python_version = "3.10"

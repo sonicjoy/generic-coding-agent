@@ -1,0 +1,38 @@
+id: feature_resume_mid_implementation
+description: Pausing mid-feature and resuming should continue from the saved phase.
+task: Implement resumable behavior
+workflow: feature
+max_steps: 2
+resume_max_steps: 5
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create resume.txt, then review it.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Resume path verified.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: resume.txt
+            content: resumed
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Created resume.txt.
+expect:
+  status: completed
+  workflow: feature
+  phases:
+    - planning
+    - implementation
+    - review
+  files:
+    resume.txt:
+      equals: resumed
+  final_contains: Resume path verified.
