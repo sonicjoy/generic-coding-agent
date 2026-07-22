@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from gca.paths import IGNORED_DIRS
 from gca.tools.base import Tool, ToolContext, ToolResult
 
-_IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".gca"}
 _MAX_MATCHES = 200
 
 
@@ -51,9 +51,11 @@ class SearchTool(Tool):
         for file in files:
             if not file.is_file():
                 continue
-            if any(part in _IGNORED_DIRS for part in file.parts):
+            if any(part in IGNORED_DIRS for part in file.parts):
                 continue
             if suffix and not file.name.endswith(str(suffix)):
+                continue
+            if file.stat().st_size > ctx.execution.max_read_bytes:
                 continue
             try:
                 text = file.read_text(encoding="utf-8")

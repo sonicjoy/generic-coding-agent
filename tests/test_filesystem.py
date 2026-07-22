@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gca.tools.base import ToolContext, ToolError
+from gca.tools.base import ExecutionPolicy, ToolContext, ToolError
 from gca.tools.filesystem import (
     CreateFileTool,
     DeleteFileTool,
@@ -65,3 +65,16 @@ def test_path_escape_is_blocked(tmp_path: Path) -> None:
     except ToolError:
         return
     raise AssertionError("expected ToolError for path escape")
+
+
+def test_read_file_enforces_size_limit(tmp_path: Path) -> None:
+    (tmp_path / "large.txt").write_text("0123456789", encoding="utf-8")
+    ctx = ToolContext(
+        workspace=tmp_path,
+        execution=ExecutionPolicy(max_read_bytes=5),
+    )
+
+    result = ReadFileTool().run(ctx, path="large.txt")
+
+    assert not result.ok
+    assert "exceeds read limit" in result.output

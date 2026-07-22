@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from gca.paths import IGNORED_DIRS
 from gca.tools.base import Tool, ToolContext, ToolResult
-
-_IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".gca"}
 
 
 class ExploreTool(Tool):
@@ -44,7 +43,7 @@ class ExploreTool(Tool):
             if depth > max_depth:
                 return
             entries = sorted(
-                (e for e in directory.iterdir() if e.name not in _IGNORED_DIRS),
+                (e for e in directory.iterdir() if e.name not in IGNORED_DIRS),
                 key=lambda e: (e.is_file(), e.name.lower()),
             )
             for entry in entries:
@@ -80,6 +79,10 @@ class ReadFileTool(Tool):
         target = ctx.resolve(path)
         if not target.is_file():
             return ToolResult.failure(f"file not found: {path}")
+        if target.stat().st_size > ctx.execution.max_read_bytes:
+            return ToolResult.failure(
+                f"file exceeds read limit ({ctx.execution.max_read_bytes} bytes): {path}"
+            )
         text = target.read_text(encoding="utf-8")
         lines = text.splitlines()
         start = kwargs.get("start_line")

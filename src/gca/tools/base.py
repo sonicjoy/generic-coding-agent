@@ -9,15 +9,26 @@ arguments matching the schema.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from gca.credentials import CredentialBroker
 from gca.providers.base import ToolSpec
 
 
 class ToolError(Exception):
     """Raised when a tool cannot complete a request (reported back to the model)."""
+
+
+@dataclass
+class ExecutionPolicy:
+    """Hard runtime limits shared by all tools."""
+
+    profile: str = "local"
+    max_tool_timeout: int = 300
+    max_output_chars: int = 20_000
+    max_read_bytes: int = 1_000_000
 
 
 @dataclass
@@ -29,6 +40,12 @@ class ToolContext:
     """
 
     workspace: Path
+    phase: str = "execute"
+    audit_id: str = ""
+    allowed_tools: frozenset[str] | None = None
+    allowed_secrets: frozenset[str] = frozenset()
+    execution: ExecutionPolicy = field(default_factory=ExecutionPolicy)
+    credentials: CredentialBroker = field(default_factory=CredentialBroker.from_environment)
 
     def resolve(self, relative: str) -> Path:
         """Resolve ``relative`` under the workspace, rejecting path escapes."""
@@ -38,6 +55,32 @@ class ToolContext:
         if target != root and root not in target.parents:
             raise ToolError(f"path escapes workspace: {relative!r}")
         return target
+
+    def allows(self, tool_name: str) -> bool:
+        """Return whether the current phase permits ``tool_name``."""
+
+        return self.allowed_tools is None or tool_name in self.allowed_tools
+
+    def secret(self, name: str) -> str:
+        """Return an authorized secret without exposing the broker directly."""
+
+        try:
+            return self.credentials.get(name, allowed=self.allowed_secrets)
+        except (KeyError, PermissionError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    def subprocess_env(self, *, allowed_keys: frozenset[str] = frozenset()) -> dict[str, str]:
+        """Return a credential-sanitized subprocess environment."""
+
+        return self.credentials.subprocess_env(
+            self.execution.profile,
+            allowed_keys=allowed_keys,
+        )
+
+    def redact(self, text: str) -> str:
+        """Redact known secrets from model-facing or persisted output."""
+
+        return self.credentials.redact(text)
 
 
 @dataclass
@@ -62,6 +105,8 @@ class Tool(ABC):
     name: str = ""
     description: str = ""
     parameters: dict[str, Any] = {}
+    capabilities: frozenset[str] = frozenset()
+    risk: str = "low"
 
     def spec(self) -> ToolSpec:
         return ToolSpec(name=self.name, description=self.description, parameters=self.parameters)

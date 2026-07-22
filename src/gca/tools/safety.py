@@ -23,7 +23,7 @@ class BlockedCommand:
     rule: str
 
 
-def check_command(command: str) -> BlockedCommand | None:
+def check_command(command: str, *, hosted: bool = False) -> BlockedCommand | None:
     """Return a :class:`BlockedCommand` when ``command`` violates a safety rule."""
 
     text = command.strip()
@@ -46,7 +46,7 @@ def check_command(command: str) -> BlockedCommand | None:
         )
 
     for argv in _command_argv_groups(tokens):
-        blocked = _check_argv(argv)
+        blocked = _check_argv(argv, hosted=hosted)
         if blocked is not None:
             return blocked
     return None
@@ -74,7 +74,7 @@ _TRANSPARENT_WRAPPERS = frozenset({"env", "nohup", "nice", "ionice", "setsid", "
 _SHELL_NAMES = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 
 
-def _check_argv(tokens: list[str]) -> BlockedCommand | None:
+def _check_argv(tokens: list[str], *, hosted: bool = False) -> BlockedCommand | None:
     tokens = [token for token in tokens if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token)]
     if not tokens:
         return None
@@ -91,13 +91,13 @@ def _check_argv(tokens: list[str]) -> BlockedCommand | None:
         # Recurse into `bash -c '<payload>'` so wrappers cannot launder commands.
         for index, arg in enumerate(tokens[1:], start=1):
             if arg == "-c" and index + 1 < len(tokens):
-                return check_command(tokens[index + 1])
+                return check_command(tokens[index + 1], hosted=hosted)
         return None
 
     if name in _TRANSPARENT_WRAPPERS:
         rest = [arg for arg in tokens[1:] if not arg.startswith("-")]
         if rest:
-            return _check_argv(rest)
+            return _check_argv(rest, hosted=hosted)
         return None
 
     if name == "timeout":
@@ -106,7 +106,7 @@ def _check_argv(tokens: list[str]) -> BlockedCommand | None:
             rest = rest[1:]
         if rest:
             # Skip the duration argument.
-            return _check_argv(rest[1:]) if len(rest) > 1 else None
+            return _check_argv(rest[1:], hosted=hosted) if len(rest) > 1 else None
         return None
 
     if name == "find" and any(arg == "-delete" for arg in tokens[1:]):
@@ -117,7 +117,7 @@ def _check_argv(tokens: list[str]) -> BlockedCommand | None:
     if name == "find" and any(arg in {"-exec", "-execdir", "-ok", "-okdir"} for arg in tokens[1:]):
         for index, arg in enumerate(tokens[1:], start=1):
             if arg in {"-exec", "-execdir", "-ok", "-okdir"} and index + 1 < len(tokens):
-                blocked = _check_argv(tokens[index + 1 :])
+                blocked = _check_argv(tokens[index + 1 :], hosted=hosted)
                 if blocked is not None:
                     return blocked
         return None
@@ -143,11 +143,11 @@ def _check_argv(tokens: list[str]) -> BlockedCommand | None:
             rule="mkfs",
         )
     if name == "git":
-        return _check_git(tokens[1:])
+        return _check_git(tokens[1:], hosted=hosted)
     return None
 
 
-def _check_git(args: list[str]) -> BlockedCommand | None:
+def _check_git(args: list[str], *, hosted: bool = False) -> BlockedCommand | None:
     """Inspect git argv after global options."""
 
     index = 0
@@ -165,6 +165,11 @@ def _check_git(args: list[str]) -> BlockedCommand | None:
 
     subcommand = args[index]
     rest = args[index + 1 :]
+    if hosted and subcommand in {"commit", "push", "remote"}:
+        return BlockedCommand(
+            reason=f"git {subcommand} is service-owned in hosted mode",
+            rule="hosted-git-publication",
+        )
     if subcommand == "push" and _has_flag(rest, {"-f", "--force", "--force-with-lease"}):
         return BlockedCommand(
             reason="git push --force is blocked to protect shared history",

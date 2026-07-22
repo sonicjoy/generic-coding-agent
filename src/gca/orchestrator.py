@@ -7,10 +7,12 @@ from pathlib import Path
 
 from gca.agent import Agent, AgentConfig, AgentResult
 from gca.complexity import classify_task
+from gca.credentials import CredentialBroker
 from gca.models import ModelProfile, ModelRegistry
 from gca.personas import PersonaSet
 from gca.providers.base import Message
 from gca.routing import WORKFLOW_FAST, RoutingPolicy
+from gca.repo_config import RepoConfig
 from gca.session import (
     STATUS_ACTIVE,
     STATUS_COMPLETED,
@@ -21,7 +23,8 @@ from gca.session import (
     SessionStore,
     WorkflowState,
 )
-from gca.tools.base import ToolContext, ToolRegistry
+from gca.tool_policy import registry_for_phase
+from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
 from gca.tools.control import FINISH_TOOL_NAME
 from gca.workflows import (
     SubmitPlanTool,
@@ -71,6 +74,9 @@ class RunCoordinator:
         policy: RoutingPolicy,
         tools: ToolRegistry,
         system_prompt: str,
+        repo_config: RepoConfig,
+        execution_policy: ExecutionPolicy,
+        credentials: CredentialBroker,
         personas: PersonaSet | None = None,
         config_fingerprint: str = "",
         on_event: EventHook | None = None,
@@ -84,6 +90,9 @@ class RunCoordinator:
         self.system_prompt = system_prompt
         self.personas = personas or PersonaSet()
         self.config_fingerprint = config_fingerprint
+        self.repo_config = repo_config
+        self.execution_policy = execution_policy
+        self.credentials = credentials
         self.on_event = on_event
 
     def run(self, session: Session, store: SessionStore) -> AgentResult:
@@ -206,11 +215,12 @@ class RunCoordinator:
             session.messages.append(Message(role="system", content=self.system_prompt))
             session.messages.append(Message(role="user", content=session.task))
         self._emit(f"[routing] phase=execute model={model_name}")
+        registry = self._phase_tools("execute", workflow=workflow.name)
         result = Agent(
             provider=profile.provider,
-            registry=self.tools,
+            registry=registry,
             session=session,
-            context=ToolContext(workspace=self.workspace),
+            context=self._tool_context("execute", registry),
             store=store,
             config=AgentConfig(max_steps=self.max_steps),
             on_event=self.on_event,
@@ -355,11 +365,12 @@ class RunCoordinator:
         remaining = self.max_steps - parent.step_count
         phase_limit = child.step_count + remaining
         phase_store = _PhaseStore(parent, record, profile.name, store)
+        registry = self._phase_tools(phase, workflow=workflow.name)
         result = Agent(
             provider=profile.provider,
-            registry=self._phase_tools(phase),
+            registry=registry,
             session=child,
-            context=ToolContext(workspace=self.workspace),
+            context=self._tool_context(phase, registry),
             store=phase_store,
             config=AgentConfig(max_steps=phase_limit),
             on_event=self.on_event,
@@ -368,18 +379,28 @@ class RunCoordinator:
         phase_store.save(child)
         return result, record
 
-    def _phase_tools(self, phase: str) -> ToolRegistry:
-        spec = next(
-            phase_spec for phase_spec in get_workflow("feature").phases if phase_spec.name == phase
+    def _phase_tools(self, phase: str, *, workflow: str = "feature") -> ToolRegistry:
+        registry = registry_for_phase(
+            self.tools,
+            self.repo_config,
+            phase,
+            workflow=workflow,
         )
-        names = set(self.tools.names()) if spec.allowed_tools is None else set(spec.allowed_tools)
-        names.add(FINISH_TOOL_NAME)
-        registry = self.tools.subset(names)
         if phase == "planning":
             registry.register(SubmitPlanTool())
         elif phase == "review":
             registry.register(SubmitReviewTool())
         return registry
+
+    def _tool_context(self, phase: str, registry: ToolRegistry) -> ToolContext:
+        return ToolContext(
+            workspace=self.workspace,
+            phase=phase,
+            audit_id=phase,
+            allowed_tools=frozenset(registry.names()),
+            execution=self.execution_policy,
+            credentials=self.credentials,
+        )
 
     def _phase_system_prompt(self, phase: str) -> str:
         role = self.personas.for_phase(phase)

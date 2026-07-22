@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from gca.plugins import load_plugins
 from gca.tools.base import ToolContext, ToolRegistry
 
@@ -96,3 +98,16 @@ def test_legacy_provider_is_registered_as_default(tmp_path: Path) -> None:
 
     assert loaded.provider is not None
     assert loaded.models.names() == ["default"]
+
+
+def test_plugin_module_allowlist_is_fail_closed(tmp_path: Path) -> None:
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "shout.py").write_text(_PLUGIN_SRC, encoding="utf-8")
+    (plugins_dir / "other.py").write_text(_PLUGIN_SRC, encoding="utf-8")
+
+    loaded = load_plugins(plugins_dir, allowed_modules={"shout"})
+
+    assert loaded.modules == ["shout.py"]
+    with pytest.raises(ImportError, match="not found"):
+        load_plugins(plugins_dir, allowed_modules={"missing"})

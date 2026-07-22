@@ -45,17 +45,19 @@ class RunCommandTool(Tool):
 
     def run(self, ctx: ToolContext, **kwargs: Any) -> ToolResult:
         command = str(kwargs["command"])
-        blocked = check_command(command)
+        blocked = check_command(command, hosted=ctx.execution.profile == "hosted")
         if blocked is not None:
             return ToolResult.failure(
                 f"blocked by safety guardrail ({blocked.rule}): {blocked.reason}"
             )
-        timeout = int(kwargs.get("timeout", _DEFAULT_TIMEOUT))
+        requested_timeout = int(kwargs.get("timeout", _DEFAULT_TIMEOUT))
+        timeout = max(1, min(requested_timeout, ctx.execution.max_tool_timeout))
         try:
             proc = subprocess.run(
                 command,
                 shell=True,
                 cwd=str(ctx.workspace),
+                env=ctx.subprocess_env(),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -63,9 +65,10 @@ class RunCommandTool(Tool):
         except subprocess.TimeoutExpired:
             return ToolResult.failure(f"command timed out after {timeout}s: {command}")
 
-        output = (proc.stdout or "") + (proc.stderr or "")
-        if len(output) > _MAX_OUTPUT:
-            output = output[:_MAX_OUTPUT] + "\n... (output truncated)"
+        output = ctx.redact((proc.stdout or "") + (proc.stderr or ""))
+        output_limit = min(_MAX_OUTPUT, ctx.execution.max_output_chars)
+        if len(output) > output_limit:
+            output = output[:output_limit] + "\n... (output truncated)"
         header = f"$ {command}\n(exit code: {proc.returncode})\n"
         result = header + output
         if proc.returncode == 0:

@@ -15,10 +15,10 @@ from gca.model_config import (
     load_model_catalog,
 )
 from gca.models import ModelProfile, ModelRegistry
-from gca.plugins import LoadedPlugins, load_plugins
+from gca.plugins import LoadedPlugins
 from gca.providers.scripted import ScriptedProvider
 from gca.repo_config import RepoConfigError, load_repo_config
-from gca.runtime import RuntimeConfig, create_coordinator
+from gca.runtime import RuntimeConfig, create_coordinator, load_configured_plugins
 from gca.session import SessionStore
 
 
@@ -63,7 +63,7 @@ def _load_dotenv_files(config: RuntimeConfig) -> None:
 
 def _load_models(args: argparse.Namespace, config: RuntimeConfig) -> LoadedPlugins:
     _load_dotenv_files(config)
-    loaded = load_plugins(config.plugins_dir) if config.plugins_dir is not None else LoadedPlugins()
+    loaded = load_configured_plugins(config)
 
     catalog_paths = list(default_model_config_paths(config.workspace))
     if config.models_paths:

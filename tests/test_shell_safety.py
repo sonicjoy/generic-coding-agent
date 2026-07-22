@@ -96,3 +96,10 @@ def test_allows_python_c_with_semicolons(tmp_path: Path) -> None:
     )
     assert result.ok
     assert "ok" in result.output
+
+
+@pytest.mark.parametrize("command", ["git commit -am test", "git push origin branch", "git remote -v"])
+def test_hosted_mode_blocks_service_owned_git(command: str) -> None:
+    blocked = check_command(command, hosted=True)
+    assert blocked is not None
+    assert blocked.rule == "hosted-git-publication"

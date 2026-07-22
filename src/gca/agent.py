@@ -105,6 +105,7 @@ class Agent:
                 return self._result()
 
             response = self.provider.complete(session.messages, self.registry.specs())
+            response.content = self.context.redact(response.content)
             session.step_count += 1
             session.messages.append(
                 Message(
@@ -169,17 +170,21 @@ class Agent:
         return False
 
     def _run_tool(self, name: str, arguments: dict[str, object]) -> tuple[str, bool, bool]:
+        if not self.context.allows(name):
+            return (f"error: tool '{name}' is not allowed in phase {self.context.phase}", False, False)
         tool = self.registry.get(name)
         if tool is None:
             return (f"error: unknown tool '{name}'", False, False)
         try:
             result = tool.run(self.context, **arguments)
         except ToolError as exc:
-            return (f"error: {exc}", False, False)
+            return (self.context.redact(f"error: {exc}"), False, False)
         except Exception as exc:  # defensive: never let a tool crash the loop
             return (
-                f"error: tool '{name}' raised {type(exc).__name__}: {exc}",
+                self.context.redact(
+                    f"error: tool '{name}' raised {type(exc).__name__}: {exc}"
+                ),
                 False,
                 True,
             )
-        return (result.output, result.ok, False)
+        return (self.context.redact(result.output), result.ok, False)

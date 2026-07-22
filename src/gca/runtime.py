@@ -7,6 +7,7 @@ from pathlib import Path
 
 from gca.agent import Agent, AgentConfig, EventHook
 from gca.context import build_context_prompt
+from gca.credentials import CredentialBroker
 from gca.models import ModelRegistry
 from gca.orchestrator import RunCoordinator
 from gca.personas import PersonaSet, load_personas
@@ -15,8 +16,9 @@ from gca.providers.base import LLMProvider, Message
 from gca.repo_config import RepoConfig, load_repo_config
 from gca.session import Session, SessionStore
 from gca.skills import LoadSkillTool, SkillRegistry
+from gca.tool_policy import register_fixed_commands, tool_names_for_phase, validate_tool_policy
 from gca.tools import build_registry
-from gca.tools.base import ToolContext, ToolRegistry
+from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
 
 DEFAULT_SYSTEM_PROMPT = """\
 You are a generic coding agent operating autonomously inside a project workspace.
@@ -93,20 +95,32 @@ def build_registry_with_extras(
         repo_config = config.repo_config or load_repo_config(config.workspace)
         plugins_dir = config.plugins_dir or repo_config.plugins.directory
         if plugins_dir is not None:
-            load_plugins(plugins_dir, registry)
+            load_configured_plugins(config).register_tools(registry)
+    repo_config = config.repo_config or load_repo_config(config.workspace)
+    register_fixed_commands(registry, repo_config)
+    validate_tool_policy(registry, repo_config)
     return registry
 
 
 def resolve_provider(config: RuntimeConfig, fallback: LLMProvider) -> LLMProvider:
     """Use a provider supplied by a plugin if present, else the fallback."""
 
+    loaded = load_configured_plugins(config)
+    if loaded.provider is not None:
+        return loaded.provider
+    return fallback
+
+
+def load_configured_plugins(config: RuntimeConfig) -> LoadedPlugins:
+    """Load plugins after applying repository and hosted-mode trust policy."""
+
     repo_config = config.repo_config or load_repo_config(config.workspace)
     plugins_dir = config.plugins_dir or repo_config.plugins.directory
-    if plugins_dir is not None:
-        loaded = load_plugins(plugins_dir)
-        if loaded.provider is not None:
-            return loaded.provider
-    return fallback
+    if plugins_dir is None:
+        return LoadedPlugins()
+    _validate_plugin_directory(config.workspace, plugins_dir, repo_config)
+    allowed = set(repo_config.plugins.allow) or None
+    return load_plugins(plugins_dir, allowed_modules=allowed)
 
 
 def create_agent(
@@ -130,7 +144,14 @@ def create_agent(
         session.messages.append(Message(role="system", content=system_prompt))
         session.messages.append(Message(role="user", content=session.task))
 
-    context = ToolContext(workspace=config.workspace)
+    allowed = tool_names_for_phase(registry, repo_config, "execute", workflow="fast")
+    credentials = CredentialBroker.from_environment()
+    context = ToolContext(
+        workspace=config.workspace,
+        allowed_tools=allowed,
+        execution=_execution_policy(repo_config),
+        credentials=credentials,
+    )
     return Agent(
         provider=provider,
         registry=registry,
@@ -170,5 +191,29 @@ def create_coordinator(
         system_prompt=build_system_prompt(config.workspace, skills, repo_config, personas),
         personas=personas,
         config_fingerprint=repo_config.fingerprint(),
+        repo_config=repo_config,
+        execution_policy=_execution_policy(repo_config),
+        credentials=CredentialBroker.from_environment(),
         on_event=on_event,
     )
+
+
+def _execution_policy(config: RepoConfig) -> ExecutionPolicy:
+    return ExecutionPolicy(
+        profile=config.runtime.profile,
+        max_tool_timeout=config.runtime.max_tool_timeout,
+        max_output_chars=config.runtime.max_output_chars,
+        max_read_bytes=config.runtime.max_read_bytes,
+    )
+
+
+def _validate_plugin_directory(workspace: Path, directory: Path, config: RepoConfig) -> None:
+    if config.runtime.profile != "hosted":
+        return
+    root = workspace.resolve()
+    target = directory.resolve()
+    if target == root or root in target.parents:
+        raise ValueError(
+            "hosted mode refuses plugins from the repository checkout; "
+            "use an operator-installed --plugins directory"
+        )

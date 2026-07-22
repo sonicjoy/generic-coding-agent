@@ -75,7 +75,12 @@ def _register_models(value: object, registry: ModelRegistry) -> None:
     raise TypeError("get_models() must return a mapping or iterable of ModelProfile objects")
 
 
-def load_plugins(directory: Path, registry: ToolRegistry | None = None) -> LoadedPlugins:
+def load_plugins(
+    directory: Path,
+    registry: ToolRegistry | None = None,
+    *,
+    allowed_modules: set[str] | None = None,
+) -> LoadedPlugins:
     """Load all ``*.py`` plugins from ``directory``.
 
     Tools discovered via ``TOOLS`` are returned and, if a registry is provided,
@@ -89,9 +94,18 @@ def load_plugins(directory: Path, registry: ToolRegistry | None = None) -> Loade
     if not directory.is_dir():
         return result
 
+    normalized_allow = (
+        {name if name.endswith(".py") else f"{name}.py" for name in allowed_modules}
+        if allowed_modules is not None
+        else None
+    )
+    discovered: set[str] = set()
     for path in sorted(directory.glob("*.py")):
         if path.name.startswith("_"):
             continue
+        if normalized_allow is not None and path.name not in normalized_allow:
+            continue
+        discovered.add(path.name)
         module = _load_module(path)
         result.modules.append(path.name)
 
@@ -118,5 +132,9 @@ def load_plugins(directory: Path, registry: ToolRegistry | None = None) -> Loade
             if isinstance(provider, LLMProvider):
                 result.provider = provider
                 result.models.register(ModelProfile(name="default", provider=provider))
+    if normalized_allow is not None:
+        missing = sorted(normalized_allow - discovered)
+        if missing:
+            raise ImportError(f"allowed plugin modules not found: {', '.join(missing)}")
 
     return result
