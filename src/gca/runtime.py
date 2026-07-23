@@ -36,7 +36,8 @@ Operating procedure:
 - Use tools to gather context before acting: explore the structure, search, and
   read files rather than guessing.
 - Prefer small, targeted edits. When modifying existing files, generate a unified
-  diff and use the 'apply_patch' tool instead of rewriting whole files.
+  diff and use 'apply_patch', or 'search_replace' for a single exact string change.
+  Avoid rewriting whole large files with 'write_file'.
 - After making changes, run the project's tests, linters, and build via
   'run_command'. If something fails, read the output and fix it, then retry.
 - Only change what the task requires. Keep edits minimal and safe.

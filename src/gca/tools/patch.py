@@ -19,9 +19,28 @@ from gca.tools.python_source import validate_python_source
 # How far to search around the declared hunk position before giving up.
 _SEARCH_WINDOW = 200
 
+_EXAMPLE_ENVELOPE = (
+    "Example unified diff envelope:\n"
+    "--- a/path/to/file.py\n"
+    "+++ b/path/to/file.py\n"
+    "@@ -10,3 +10,3 @@\n"
+    " context line\n"
+    "-old line\n"
+    "+new line\n"
+    " context line\n"
+    "For new files use '--- /dev/null' and '+++ b/new_file'. "
+    "Prefer search_replace for tiny single-string edits."
+)
+
 
 class PatchError(Exception):
     """Raised when a unified diff cannot be parsed or applied."""
+
+    def __init__(self, message: str, *, hint: str | None = None) -> None:
+        detail = message if hint is None else f"{message}\n{hint}"
+        super().__init__(detail)
+        self.message = message
+        self.hint = hint
 
 
 @dataclass
@@ -58,10 +77,31 @@ def _strip_prefix(path: str) -> str | None:
     return path
 
 
+def normalize_diff_text(diff: str) -> str:
+    """Strip common model wrappers (markdown fences, git preamble) before parse."""
+
+    text = diff.replace("\r\n", "\n").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    kept: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("diff --git ") or line.startswith("index "):
+            continue
+        if line.startswith("new file mode ") or line.startswith("deleted file mode "):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip() + ("\n" if kept else "")
+
+
 def parse_unified_diff(diff: str) -> list[FilePatch]:
     """Parse a unified diff into a list of :class:`FilePatch` objects."""
 
-    lines = diff.splitlines()
+    lines = normalize_diff_text(diff).splitlines()
     patches: list[FilePatch] = []
     current: FilePatch | None = None
     hunk_old: list[str] = []
@@ -84,7 +124,10 @@ def parse_unified_diff(diff: str) -> list[FilePatch]:
             flush_hunk()
             old = _strip_prefix(line[4:])
             if i + 1 >= len(lines) or not lines[i + 1].startswith("+++ "):
-                raise PatchError("malformed diff: '---' not followed by '+++'")
+                raise PatchError(
+                    "malformed diff: '---' not followed by '+++'",
+                    hint=_EXAMPLE_ENVELOPE,
+                )
             new = _strip_prefix(lines[i + 1][4:])
             current = FilePatch(old_path=old, new_path=new)
             patches.append(current)
@@ -93,7 +136,12 @@ def parse_unified_diff(diff: str) -> list[FilePatch]:
         if line.startswith("@@"):
             flush_hunk()
             if current is None:
-                raise PatchError("hunk found before any file header")
+                raise PatchError(
+                    "hunk found before any file header "
+                    "(diff must start with '--- a/path' / '+++ b/path', "
+                    "not a bare @@ hunk)",
+                    hint=_EXAMPLE_ENVELOPE,
+                )
             hunk_old_start = _parse_hunk_header(line)
             hunk_old = []
             hunk_new = []
@@ -125,7 +173,11 @@ def parse_unified_diff(diff: str) -> list[FilePatch]:
 
     flush_hunk()
     if not patches:
-        raise PatchError("no file headers found in diff")
+        raise PatchError(
+            "no file headers found in diff "
+            "(expected lines starting with '--- ' and '+++ ')",
+            hint=_EXAMPLE_ENVELOPE,
+        )
     return patches
 
 
@@ -137,7 +189,10 @@ def _parse_hunk_header(header: str) -> int:
         old_segment = old_segment.lstrip("-")
         old_start = int(old_segment.split(",")[0])
     except (IndexError, ValueError) as exc:
-        raise PatchError(f"malformed hunk header: {header!r}") from exc
+        raise PatchError(
+            f"malformed hunk header: {header!r}",
+            hint=_EXAMPLE_ENVELOPE,
+        ) from exc
     return old_start
 
 
@@ -154,7 +209,12 @@ def _locate(haystack: list[str], needle: list[str], guess: int) -> int:
         pos = lo + offset
         if haystack[pos : pos + len(needle)] == needle:
             return pos
-    raise PatchError("hunk context not found in target file")
+    raise PatchError(
+        "hunk context not found in target file "
+        "(context lines must match the current file exactly; "
+        "re-read the file and regenerate a smaller patch, or use search_replace)",
+        hint=_EXAMPLE_ENVELOPE,
+    )
 
 
 def _apply_hunks(original: str, hunks: list[Hunk]) -> str:
@@ -236,7 +296,9 @@ class ApplyPatchTool(Tool):
     description = (
         "Apply a unified diff (git-style) to the workspace. Supports modifying, "
         "creating (--- /dev/null) and deleting (+++ /dev/null) files. The patch is "
-        "validated first and applied atomically; on any failure nothing is changed."
+        "validated first and applied atomically; on any failure nothing is changed. "
+        "Prefer small search+patch edits (or search_replace for a single string) "
+        "over rewriting whole files with write_file."
     )
     parameters = {
         "type": "object",
@@ -255,8 +317,63 @@ class ApplyPatchTool(Tool):
         return ToolResult.success("\n".join(summary))
 
 
+class SearchReplaceTool(Tool):
+    """Replace one exact string occurrence in a file (small surgical edits)."""
+
+    name = "search_replace"
+    capabilities = frozenset({"write_fs"})
+    description = (
+        "Replace an exact string in an existing file. Use for tiny edits when a "
+        "full unified diff is unnecessary. Fails if old_str is missing or not unique "
+        "unless replace_all=true. Prefer this or apply_patch over write_file rewrites."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Workspace-relative file path."},
+            "old_str": {"type": "string", "description": "Exact text to find."},
+            "new_str": {"type": "string", "description": "Replacement text."},
+            "replace_all": {
+                "type": "boolean",
+                "description": "Replace every occurrence (default false: require unique).",
+            },
+        },
+        "required": ["path", "old_str", "new_str"],
+    }
+
+    def run(self, ctx: ToolContext, **kwargs: Any) -> ToolResult:
+        rel = str(kwargs["path"])
+        old = str(kwargs["old_str"])
+        new = str(kwargs["new_str"])
+        replace_all = bool(kwargs.get("replace_all", False))
+        if not old:
+            return ToolResult.failure("search_replace failed: old_str must not be empty")
+        target = ctx.resolve(rel)
+        if not target.is_file():
+            return ToolResult.failure(f"search_replace failed: file not found: {rel}")
+        original = target.read_text(encoding="utf-8")
+        count = original.count(old)
+        if count == 0:
+            return ToolResult.failure(
+                "search_replace failed: old_str not found in file "
+                "(re-read the file and copy the exact text)"
+            )
+        if count > 1 and not replace_all:
+            return ToolResult.failure(
+                f"search_replace failed: old_str matched {count} times; "
+                "narrow the string or set replace_all=true"
+            )
+        updated = original.replace(old, new) if replace_all else original.replace(old, new, 1)
+        syntax_error = validate_python_source(rel, updated)
+        if syntax_error is not None:
+            return ToolResult.failure(f"search_replace failed: {syntax_error}")
+        target.write_text(updated, encoding="utf-8")
+        replaced = count if replace_all else 1
+        return ToolResult.success(f"updated {rel} ({replaced} replacement(s))")
+
+
 def patch_tools() -> list[Tool]:
-    return [ApplyPatchTool()]
+    return [ApplyPatchTool(), SearchReplaceTool()]
 
 
 __all__ = [
@@ -264,7 +381,9 @@ __all__ = [
     "FilePatch",
     "Hunk",
     "PatchError",
+    "SearchReplaceTool",
     "apply_patch",
+    "normalize_diff_text",
     "parse_unified_diff",
     "patch_tools",
 ]

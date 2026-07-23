@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from gca.tools.base import ToolContext
-from gca.tools.patch import PatchError, apply_patch, parse_unified_diff
+from gca.tools.patch import (
+    ApplyPatchTool,
+    PatchError,
+    SearchReplaceTool,
+    apply_patch,
+    parse_unified_diff,
+)
 
 
 def _ctx(tmp_path: Path) -> ToolContext:
@@ -74,3 +80,48 @@ def test_apply_patch_allows_python_docstrings(tmp_path: Path) -> None:
     summary = apply_patch(diff, _ctx(tmp_path))
     assert summary == ["updated mod.py"]
     assert (tmp_path / "mod.py").read_text(encoding="utf-8") == '"""Module."""\nVALUE = 1\n'
+
+
+def test_multi_hunk_apply_patch_succeeds(tmp_path: Path) -> None:
+    (tmp_path / "mod.py").write_text("a = 1\nb = 2\nc = 3\nd = 4\n", encoding="utf-8")
+    diff = (
+        "--- a/mod.py\n+++ b/mod.py\n"
+        "@@ -1,2 +1,2 @@\n-a = 1\n+a = 10\n b = 2\n"
+        "@@ -3,2 +3,2 @@\n c = 3\n-d = 4\n+d = 40\n"
+    )
+    summary = apply_patch(diff, _ctx(tmp_path))
+    assert summary == ["updated mod.py"]
+    assert (tmp_path / "mod.py").read_text(encoding="utf-8") == "a = 10\nb = 2\nc = 3\nd = 40\n"
+
+
+def test_parse_tolerates_git_preamble_and_markdown_fence() -> None:
+    wrapped = (
+        "```diff\n"
+        "diff --git a/f.txt b/f.txt\n"
+        "index 111..222 100644\n"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+        "```\n"
+    )
+    patches = parse_unified_diff(wrapped)
+    assert len(patches) == 1
+    assert patches[0].new_path == "f.txt"
+
+
+def test_hunk_before_header_error_is_actionable() -> None:
+    tool = ApplyPatchTool()
+    result = tool.run(ToolContext(workspace=Path(".")), diff="@@ -1 +1 @@\n-old\n+new\n")
+    assert not result.ok
+    assert "hunk found before any file header" in result.output
+    assert "Example unified diff envelope" in result.output
+
+
+def test_search_replace_updates_unique_string(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("hello world\n", encoding="utf-8")
+    result = SearchReplaceTool().run(
+        _ctx(tmp_path),
+        path="f.txt",
+        old_str="world",
+        new_str="there",
+    )
+    assert result.ok
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "hello there\n"
