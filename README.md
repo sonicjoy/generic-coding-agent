@@ -399,10 +399,10 @@ Override automatic selection with `--workflow fast|feature|auto`, or configure
 gca:
   workflow: auto
   models:
-    fast: gpt-5.6-luna
+    fast: grok-4.5
     planning: claude-opus-4.8
-    implementation: gpt-5.6-luna
-    review: claude-fable-5
+    implementation: grok-4.5
+    review: claude-opus-4.8
   minimum_strength:
     implementation: 2
   max_review_cycles: 2

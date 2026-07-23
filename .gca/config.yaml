@@ -1,0 +1,10 @@
+version: 1
+
+routing:
+  workflow: auto
+  models:
+    fast: grok-4.5
+    planning: claude-opus-4.8
+    implementation: grok-4.5
+    review: claude-opus-4.8
+  max_review_cycles: 2
