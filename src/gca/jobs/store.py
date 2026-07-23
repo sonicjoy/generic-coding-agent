@@ -194,6 +194,63 @@ class SqliteJobStore:
             rows = connection.execute(query, values).fetchall()
         return [Job.from_dict(json.loads(str(row["data"]))) for row in rows]
 
+    def count_queued(self) -> int:
+        """Return the number of queued jobs, including delayed retries."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status = ?",
+                (JobStatus.QUEUED.value,),
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def record_worker_heartbeat(self, worker_id: str, *, claimed: bool = False) -> None:
+        """Persist worker liveness visible to the API process."""
+
+        if not worker_id.strip():
+            raise ValueError("worker_id must not be empty")
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_heartbeats (worker_id, last_seen_at, last_claimed_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                    last_seen_at = excluded.last_seen_at,
+                    last_claimed_at = CASE
+                        WHEN excluded.last_claimed_at IS NULL
+                        THEN worker_heartbeats.last_claimed_at
+                        ELSE excluded.last_claimed_at
+                    END
+                """,
+                (worker_id, now, now if claimed else None),
+            )
+
+    def worker_liveness(self) -> dict[str, object]:
+        """Return aggregate worker heartbeat/claim metadata."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS worker_count,
+                    MAX(last_seen_at) AS last_seen_at,
+                    MAX(last_claimed_at) AS last_claimed_at
+                FROM worker_heartbeats
+                """
+            ).fetchone()
+        if row is None:
+            return {
+                "worker_count": 0,
+                "last_seen_at": None,
+                "last_claimed_at": None,
+            }
+        return {
+            "worker_count": int(row["worker_count"] or 0),
+            "last_seen_at": row["last_seen_at"],
+            "last_claimed_at": row["last_claimed_at"],
+        }
+
     def claim_next(self, worker_id: str, *, lease_seconds: int = 300) -> Job | None:
         """Atomically claim one due queued job."""
 
@@ -520,6 +577,11 @@ class SqliteJobStore:
                         ON jobs(status, not_before, created_at);
                     CREATE INDEX IF NOT EXISTS jobs_lease
                         ON jobs(status, lease_expires_at);
+                    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+                        worker_id TEXT PRIMARY KEY,
+                        last_seen_at REAL NOT NULL,
+                        last_claimed_at REAL
+                    );
                     """
                 )
                 columns = {

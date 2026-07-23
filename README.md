@@ -480,6 +480,12 @@ The API exposes:
   `POST /issue-sessions/{id}/cancel`, and `POST /issue-sessions/{id}/retry`.
 - `GET /health` and `GET /ready`.
 
+`GET /ready` checks the shared job store and reports worker liveness metadata:
+queued job count, worker heartbeat age, and time since the last job claim. Set
+`GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS` to a positive value to make readiness
+fail when queued jobs exist but no worker has claimed work within that window;
+the default `0` only reports the metadata.
+
 ### Durable GitLab Issue Agent
 
 Configure one registration per GitLab project webhook in

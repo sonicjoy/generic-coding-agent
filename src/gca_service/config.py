@@ -44,6 +44,7 @@ class ServiceSettings:
     gitlab_trigger_label: str = "gca-run"
     lease_seconds: int = 1800
     poll_seconds: float = 2.0
+    ready_worker_claim_timeout_seconds: float = 0.0
     worker_id: str = field(default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}")
     allow_local_repositories: bool = False
     max_request_bytes: int = 1_000_000
@@ -101,6 +102,10 @@ class ServiceSettings:
             poll_seconds=_positive_float(
                 values.get("GCA_POLL_SECONDS", "2"),
                 "GCA_POLL_SECONDS",
+            ),
+            ready_worker_claim_timeout_seconds=_nonnegative_float(
+                values.get("GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS", "0"),
+                "GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS",
             ),
             worker_id=values.get("GCA_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}",
             allow_local_repositories=_boolean(values.get("GCA_ALLOW_LOCAL_REPOSITORIES", "false")),
@@ -170,6 +175,8 @@ class ServiceSettings:
             raise ServiceConfigError("GitLab webhook secret must be at least 16 characters")
         if self.lease_seconds <= 0:
             raise ServiceConfigError("lease_seconds must be positive")
+        if self.ready_worker_claim_timeout_seconds < 0:
+            raise ServiceConfigError("ready worker claim timeout must be non-negative")
         if self.max_request_bytes <= 0:
             raise ServiceConfigError("max_request_bytes must be positive")
         if self.default_max_steps is not None and not 1 <= self.default_max_steps <= 1000:
@@ -348,6 +355,16 @@ def _positive_float(value: str, name: str) -> float:
         raise ServiceConfigError(f"{name} must be numeric") from exc
     if parsed <= 0:
         raise ServiceConfigError(f"{name} must be positive")
+    return parsed
+
+
+def _nonnegative_float(value: str, name: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ServiceConfigError(f"{name} must be numeric") from exc
+    if parsed < 0:
+        raise ServiceConfigError(f"{name} must be non-negative")
     return parsed
 
 

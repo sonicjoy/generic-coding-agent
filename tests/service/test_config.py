@@ -78,6 +78,26 @@ def test_publish_mode_rejects_unknown_value() -> None:
         )
 
 
+def test_ready_worker_claim_timeout_is_optional_and_bounded() -> None:
+    settings = ServiceSettings.from_environment(
+        {
+            "GCA_API_TOKEN": "api-token-123456",
+            "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+            "GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS": "15.5",
+        }
+    )
+    assert settings.ready_worker_claim_timeout_seconds == 15.5
+
+    with pytest.raises(ServiceConfigError, match="GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS"):
+        ServiceSettings.from_environment(
+            {
+                "GCA_API_TOKEN": "api-token-123456",
+                "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+                "GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS": "-1",
+            }
+        )
+
+
 def test_settings_require_auth_and_repository_allowlist() -> None:
     with pytest.raises(ServiceConfigError, match="GCA_API_TOKEN"):
         ServiceSettings.from_environment({})

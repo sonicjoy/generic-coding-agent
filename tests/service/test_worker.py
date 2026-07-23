@@ -77,6 +77,9 @@ def test_worker_claims_and_completes_scripted_job(tmp_path: Path) -> None:
     assert any("event=claim" in event and job.id in event for event in events)
     assert any("event=job_done" in event and "status=completed" in event for event in events)
     assert any("event=phase" in event and "remaining=" in event for event in events)
+    liveness = state.store.worker_liveness()
+    assert liveness["worker_count"] == 1
+    assert liveness["last_claimed_at"] is not None
 
 
 def test_worker_publisher_respects_branch_publish_mode(tmp_path: Path) -> None:

@@ -112,6 +112,7 @@ class ServiceWorker:
             settings.worker_id,
             lease_seconds=settings.lease_seconds,
         )
+        self.state.store.record_worker_heartbeat(settings.worker_id, claimed=job is not None)
         if job is None:
             self._idle_ticks += 1
             if self._idle_ticks % 30 == 0:
