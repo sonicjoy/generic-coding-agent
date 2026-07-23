@@ -11,6 +11,39 @@ from gca.integrations.gitlab import GitLabWebhookNormalizer
 from gca.integrations.webhooks import WebhookContext, WebhookVerificationError
 
 
+def _github_context(event: str, payload: dict, *, delivery: str = "delivery-1") -> WebhookContext:
+    body = json.dumps(payload).encode()
+    secret = "webhook-secret"
+    signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return WebhookContext(
+        provider="github",
+        headers={
+            "X-GitHub-Event": event,
+            "X-GitHub-Delivery": delivery,
+            "X-Hub-Signature-256": signature,
+        },
+        body=body,
+    )
+
+
+def _pull_request_payload(**overrides: object) -> dict:
+    payload: dict = {
+        "repository": {
+            "full_name": "owner/repo",
+            "clone_url": "https://github.com/owner/repo.git",
+            "default_branch": "main",
+        },
+        "pull_request": {
+            "number": 43,
+            "title": "Fix budget pause publish gaps",
+            "head": {"ref": "gca/3c3a8de414bf"},
+            "base": {"ref": "main"},
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_github_issue_webhook_verifies_and_normalizes() -> None:
     body = json.dumps(
         {
@@ -70,6 +103,76 @@ def test_github_issue_requires_explicit_trigger_label() -> None:
         body=json.dumps({"action": "opened"}).encode(),
     )
 
+    assert GitHubWebhookNormalizer().normalize(context) is None
+
+
+def test_github_pull_request_review_changes_requested_enqueues_run() -> None:
+    context = _github_context(
+        "pull_request_review",
+        _pull_request_payload(
+            action="submitted",
+            review={
+                "state": "changes_requested",
+                "body": "Please add draft-publish on review budget pause.",
+            },
+        ),
+    )
+    spec = GitHubWebhookNormalizer().normalize(context, allowed_projects=frozenset({"owner/repo"}))
+
+    assert spec is not None
+    assert spec.repository.ref == "gca/3c3a8de414bf"
+    assert spec.publication is not None
+    assert spec.publication.base_ref == "main"
+    assert spec.labels["pr_id"] == "43"
+    assert spec.labels["source"] == "pull_request_review.changes_requested"
+    assert "draft-publish" in spec.task
+    assert "untrusted request data" in spec.task
+
+
+def test_github_pull_request_review_comment_requires_agent_fix() -> None:
+    ignored = _github_context(
+        "pull_request_review_comment",
+        _pull_request_payload(
+            action="created",
+            comment={
+                "body": "nit: rename this helper",
+                "path": "src/gca/orchestrator.py",
+                "line": 10,
+            },
+        ),
+        delivery="delivery-ignore",
+    )
+    assert GitHubWebhookNormalizer().normalize(ignored) is None
+
+    context = _github_context(
+        "pull_request_review_comment",
+        _pull_request_payload(
+            action="created",
+            comment={
+                "body": "/agent fix\nAddress the GitHub resume-signal gap.",
+                "path": "src/gca/issue_sessions/outcomes.py",
+                "line": 91,
+            },
+        ),
+        delivery="delivery-fix",
+    )
+    spec = GitHubWebhookNormalizer().normalize(context, allowed_projects=frozenset({"owner/repo"}))
+
+    assert spec is not None
+    assert spec.repository.ref == "gca/3c3a8de414bf"
+    assert spec.labels["source"] == "pull_request_review_comment"
+    assert "/agent fix" in spec.task
+    assert "outcomes.py:91" in spec.task
+
+
+def test_github_pull_request_review_approved_without_agent_fix_is_ignored() -> None:
+    context = _github_context(
+        "pull_request_review",
+        _pull_request_payload(
+            action="submitted",
+            review={"state": "approved", "body": "LGTM"},
+        ),
+    )
     assert GitHubWebhookNormalizer().normalize(context) is None
 
 
