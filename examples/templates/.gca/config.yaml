@@ -35,6 +35,8 @@ runtime:
 #   working_dir: /workspace
 #   cpu: 2
 #   memory: 4g
+#   # Default false. Set true only for trusted fixed commands that need
+#   # outbound access; networked containers can exfiltrate workspace data.
 #   network: false
 #   default_timeout: 300
 #   remove_image_after_run: false
