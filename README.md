@@ -518,6 +518,26 @@ deliveries enqueue only when a maintainer applies the `gca-run` label; customize
 it with `GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL` (or
 per-registration `trigger_label`).
 
+For a one-command hosted GitHub webhook smoke test, export service settings plus
+the target repository identity, then run:
+
+```bash
+export GCA_API_TOKEN=replace-with-a-long-random-token
+export GCA_GITHUB_WEBHOOK_SECRET=replace-with-a-long-random-secret
+export GCA_ALLOWED_GITHUB_PROJECTS=owner/repo
+export GCA_E2E_REPOSITORY_FULL_NAME=owner/repo
+export GCA_E2E_REPOSITORY_CLONE_URL=https://github.com/owner/repo.git
+export GCA_DATA_DIR=/tmp/gca-e2e
+
+examples/e2e_webhook.sh
+```
+
+The script starts `gca-service serve`, waits for `/ready`, starts
+`gca-service worker`, signs a GitHub `issues.labeled` webhook with Python HMAC,
+posts it to `/webhooks/github`, polls `/runs/{id}`, and prints the terminal run
+status. It defaults `GCA_PUBLISH_MODE=off`; set it yourself and provide SCM
+tokens when you want the e2e to publish.
+
 GitHub pull-request review deliveries also enqueue into the same `/runs` queue
 when the webhook is subscribed to **Pull request reviews** and **Pull request
 review comments**:
