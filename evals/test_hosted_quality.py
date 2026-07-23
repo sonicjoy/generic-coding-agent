@@ -31,6 +31,16 @@ class RecordingAdapter:
     def push(self, workspace: Path, branch: str, repository_url: str) -> None:
         self.branches.append(branch)
 
+    def link_branch_to_issue(
+        self,
+        repository_url: str,
+        branch: str,
+        issue_id: str,
+        oid: str,
+    ) -> bool:
+        _ = repository_url, branch, issue_id, oid
+        return False
+
     def open_change_request(self, request: ChangeRequest) -> str:
         self.requests.append(request)
         return "https://scm.example/changes/1"

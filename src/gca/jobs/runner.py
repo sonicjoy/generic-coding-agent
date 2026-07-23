@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from gca.agent import AgentResult, EventHook
 from gca.credentials import CredentialBroker
@@ -41,6 +41,13 @@ class Publisher(Protocol):
         *,
         executor: CommandExecutor | None = None,
     ) -> dict[str, object]: ...
+
+
+@runtime_checkable
+class WorkingBranchPreparer(Protocol):
+    """Optional publisher hook for preparing issue branches before agent work."""
+
+    def prepare_working_branch(self, job: Job, workspace: Path) -> dict[str, object] | None: ...
 
 
 RuntimeModelLoader = Callable[[RuntimeConfig], LoadedPlugins]
@@ -118,6 +125,7 @@ class JobRunner:
             self._heartbeat(job)
             repo_config = self._load_repo_config(layout.repository)
             lifecycle = self._build_lifecycle(job, layout.repository, repo_config)
+            self._prepare_working_branch(job, repository)
             result, implementation_summary = self._run_agent(
                 job, layout, repo_config, lifecycle.executor
             )
@@ -183,6 +191,16 @@ class JobRunner:
             run_id=job.id,
             executor=executor,
         )
+
+    def _prepare_working_branch(self, job: Job, repository: Path) -> None:
+        if not isinstance(self.publisher, WorkingBranchPreparer):
+            return
+        prepared = self.publisher.prepare_working_branch(job, repository)
+        if prepared is None:
+            return
+        job.publication = {**job.publication, **prepared}
+        self.store.save(job)
+        self._heartbeat(job)
 
     def _run_agent(
         self,

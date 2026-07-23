@@ -60,6 +60,72 @@ class GitHubScmAdapter:
             token=self.token,
         )
 
+    def link_branch_to_issue(
+        self,
+        repository_url: str,
+        branch: str,
+        issue_id: str,
+        oid: str,
+    ) -> bool:
+        slug = repository_path(repository_url)
+        parts = slug.split("/")
+        if len(parts) != 2:
+            raise PublicationError(f"invalid GitHub repository path: {slug}")
+        try:
+            number = int(issue_id)
+        except ValueError as exc:
+            raise PublicationError(f"invalid GitHub issue number: {issue_id}") from exc
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        endpoint = _graphql_url(self.api_url)
+        lookup = request_json(
+            "POST",
+            endpoint,
+            headers=headers,
+            body={
+                "query": (
+                    "query($owner:String!,$name:String!,$number:Int!){"
+                    "repository(owner:$owner,name:$name){"
+                    "id issue(number:$number){id} defaultBranchRef{target{oid}}"
+                    "}}"
+                ),
+                "variables": {
+                    "owner": parts[0],
+                    "name": parts[1],
+                    "number": number,
+                },
+            },
+        )
+        repository = _graphql_repository(lookup)
+        issue = repository.get("issue")
+        if not isinstance(issue, dict) or not issue.get("id"):
+            raise PublicationError(f"GitHub issue not found: #{issue_id}")
+        created = request_json(
+            "POST",
+            endpoint,
+            headers=headers,
+            body={
+                "query": (
+                    "mutation($input:CreateLinkedBranchInput!){"
+                    "createLinkedBranch(input:$input){linkedBranch{ref{name}}}"
+                    "}"
+                    "}"
+                ),
+                "variables": {
+                    "input": {
+                        "issueId": issue["id"],
+                        "name": branch,
+                        "oid": oid,
+                        "repositoryId": repository["id"],
+                    }
+                },
+            },
+        )
+        result = _graphql_data(created).get("createLinkedBranch")
+        return isinstance(result, dict) and result.get("linkedBranch") is not None
+
     def open_change_request(self, request: ChangeRequest) -> str:
         slug = repository_path(request.repository_url)
         parts = slug.split("/")
@@ -140,6 +206,31 @@ class GitHubScmAdapter:
             "Authorization": f"Bearer {self.token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+
+def _graphql_url(api_url: str) -> str:
+    if api_url.endswith("/api/v3"):
+        return api_url[: -len("/api/v3")] + "/api/graphql"
+    return f"{api_url}/graphql"
+
+
+def _graphql_data(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise PublicationError("GitHub GraphQL response was not an object")
+    errors = payload.get("errors")
+    if errors:
+        raise PublicationError(f"GitHub GraphQL returned errors: {errors}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise PublicationError("GitHub GraphQL response did not include data")
+    return data
+
+
+def _graphql_repository(payload: Any) -> dict[str, Any]:
+    repository = _graphql_data(payload).get("repository")
+    if not isinstance(repository, dict) or not repository.get("id"):
+        raise PublicationError("GitHub GraphQL response did not include repository")
+    return repository
 
 
 class GitHubWebhookNormalizer:

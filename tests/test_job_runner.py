@@ -46,6 +46,18 @@ class _FakePublisher:
     def __init__(self) -> None:
         self.calls: list[Job] = []
         self.draft_flags: list[bool] = []
+        self.prepared: list[Job] = []
+
+    def prepare_working_branch(self, job: Job, workspace: Path) -> dict[str, object] | None:
+        _ = workspace
+        if not job.run_spec.labels.get("issue_id"):
+            return None
+        self.prepared.append(job)
+        return {
+            "branch": f"gca/{job.id[:12]}",
+            "commit_sha": "base123",
+            "linked_issue": True,
+        }
 
     def publish(
         self,
@@ -144,6 +156,55 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
     assert result.llm_usage["completion_tokens"] == 2
     assert result.llm_usage["cost_usd"] == 0.003
     assert store.load(result.id).llm_usage["prompt_tokens"] == 5
+
+
+def test_job_runner_prepares_issue_branch_before_agent(tmp_path: Path) -> None:
+    source = _source_repository(tmp_path)
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(
+        RunSpec(
+            task="Fix issue",
+            repository=RepositorySpec(url=str(source), ref="main"),
+            workflow="fast",
+            max_steps=2,
+            publication=PublicationTarget(provider="fake", base_ref="main"),
+            labels={"issue_id": "123"},
+        )
+    )
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker")
+    assert claimed is not None
+    provider = ScriptedProvider.from_script(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "name": "finish",
+                        "arguments": {"summary": "Done."},
+                    }
+                ]
+            }
+        ]
+    )
+
+    def load_models(config: object) -> LoadedPlugins:
+        loaded = LoadedPlugins()
+        loaded.models.register(ModelProfile("scripted", provider, speed=5, cost=1))
+        return loaded
+
+    publisher = _FakePublisher()
+    result = JobRunner(
+        store=store,
+        workspace_root=tmp_path / "workspaces",
+        model_loader=load_models,
+        publisher=publisher,
+        allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
+    ).execute(claimed)
+
+    assert result.status == JobStatus.COMPLETED, result.last_error
+    assert [job.id for job in publisher.prepared] == [result.id]
 
 
 def test_job_runner_resumes_paused_session(tmp_path: Path) -> None:
