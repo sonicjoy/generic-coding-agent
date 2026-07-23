@@ -50,9 +50,16 @@ Defined in `pyproject.toml` / `README.md`:
   for deterministic runs, or a plugin exposing `get_provider()` for a real model.
   The test suite and the demo run entirely offline when a fake executor is used;
   live demos that execute `run_command` need Docker.
-- End-to-end demo (creates + patches + runs a file in a scratch workspace):
-  `gca run "Add a greeting feature to this project" --workspace /tmp/gca_demo \
-   --skills examples/skills --script examples/demo_script.json`
+- End-to-end demo (creates + patches + runs a file in a scratch workspace).
+  The demo script calls `python3` via `run_command`, so seed a Python
+  isolation image — the packaged default image is sandbox-only (no language
+  SDKs):
+  ```bash
+  mkdir -p /tmp/gca_demo
+  cp examples/templates/Dockerfile.agent /tmp/gca_demo/
+  gca run "Add a greeting feature to this project" --workspace /tmp/gca_demo \
+    --skills examples/skills --script examples/demo_script.json
+  ```
 - Sessions persist as JSON under `<workspace>/.gca/sessions` by default (ignored
   by git). Local runs also use ephemeral copies under `.gca/runs/` and sync
   changes back on success. List with `gca sessions` and continue with
