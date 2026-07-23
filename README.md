@@ -383,6 +383,12 @@ sequence of tool calls with no network access (demos/tests).
 
 ## Workflows and routing
 
+Labeled SCM issue webhooks wrap title/body as untrusted task text. Complexity
+scoring uses the **issue title only** for those framed tasks so process words in
+the description (for example `end-to-end`) do not force the multi-phase feature
+workflow and exhaust a small step budget. Plain CLI tasks still classify on the
+full prompt.
+
 `gca` classifies task text deterministically, without an extra model call:
 
 - `fast`: one efficient coding agent for small tasks.

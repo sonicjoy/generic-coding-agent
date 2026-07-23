@@ -7,6 +7,11 @@ from dataclasses import dataclass
 
 from gca.routing import WORKFLOW_FAST, WORKFLOW_FEATURE, RoutingPolicy
 
+_SCM_ISSUE_TASK_RE = re.compile(
+    r"^SCM issue task\..*?\n\nTitle:\s*(.*?)\n\nDescription:\n",
+    re.DOTALL | re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class ComplexityAssessment:
@@ -18,10 +23,27 @@ class ComplexityAssessment:
     recommended_workflow: str
 
 
+def task_text_for_classification(task: str) -> str:
+    """Return the text used for complexity keyword/length scoring.
+
+    SCM issue tasks wrap untrusted title/body with framing boilerplate. Issue
+    descriptions often mention process words such as ``end-to-end`` that would
+    incorrectly force the feature workflow for tiny labeled tasks. Score those
+    runs on the issue title only.
+    """
+
+    match = _SCM_ISSUE_TASK_RE.match(task.strip())
+    if match is not None:
+        title = match.group(1).strip()
+        if title:
+            return title
+    return task
+
+
 def classify_task(task: str, policy: RoutingPolicy) -> ComplexityAssessment:
     """Classify a task without spending an additional model call."""
 
-    normalized = " ".join(task.lower().split())
+    normalized = " ".join(task_text_for_classification(task).lower().split())
     signals: list[str] = []
     score = 0
 
