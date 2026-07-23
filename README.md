@@ -275,9 +275,10 @@ Manifest paths are repository-relative and cannot escape the workspace.
 Frontmatter remains backward-compatible but is stripped from model-facing
 instructions by default.
 
-Fixed commands use `subprocess` argv with `shell=False`; optional parameters
-must declare bounded types/choices in the manifest. Global deny and phase allow
-rules are enforced by the tool registry, not only by prompts.
+Fixed commands run a fixed argv inside the isolation container (no shell);
+optional parameters must declare bounded types/choices in the manifest. Global
+deny and phase allow rules are enforced by the tool registry, not only by
+prompts.
 
 ## Provider configuration
 
@@ -550,7 +551,9 @@ The built-in controls isolate **target-repo commands** in Docker containers
 (with CPU/memory limits and workspace bind mounts). Deploy the GCA worker with
 access to a Docker Engine (typically by mounting `/var/run/docker.sock`).
 Monitoring / anomaly detection stays outside core and can create an SCM issue
-or call `POST /runs`.
+or call `POST /runs`. The worker's retention janitor also prunes stale per-run
+isolation images (`gca/<run-id>:run`) after the workspace retention window; the
+shared `gca/default-isolation` image is kept.
 
 ### Deploy GCA on AWS / GCP (Docker)
 
@@ -630,10 +633,13 @@ src/gca/
   plugins.py     dynamic plugin loading
   jobs/          durable job lifecycle, SQLite store/queue, runner
   workspace/     isolated repository preparation
+  executor/      Docker isolation executor, default image, run lifecycle
   integrations/  webhook and SCM adapter contracts/implementations
   providers/     LLMProvider, OpenAI-compatible, ScriptedProvider
   tools/         built-in and fixed-command tools
 src/gca_service/ optional ASGI API and worker
+Dockerfile       uv-based worker/API image
+compose.yaml     local/cloud-like API+worker with docker.sock
 examples/        copy-ready config/persona/skill/model templates
 evals/           offline deterministic evaluation scenarios
 tests/           pytest suite

@@ -67,6 +67,7 @@ def test_retention_deletes_expired_workspaces_and_events(tmp_path: Path) -> None
         log_retention_seconds=86400 * 30,
     ).run()
     assert result["deleted_workspaces"] == 1
+    assert result["deleted_images"] == 0
     assert not drop.exists()
     assert keep.exists()
     assert result["deleted_events"] >= 1

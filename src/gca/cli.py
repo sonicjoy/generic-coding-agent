@@ -256,7 +256,7 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
 def _cmd_validate(args: argparse.Namespace) -> int:
     """Validate effective repository configuration without calling an LLM."""
 
-    config = _build_config(args)
+    config = replace(_build_config(args), prepare_executor=False)
     loaded = _load_models(args, config)
     coordinator = create_coordinator(config, loaded.models, loaded_plugins=loaded)
     missing_models = {

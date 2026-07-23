@@ -57,6 +57,7 @@ class RuntimeConfig:
     repo_config: RepoConfig | None = None
     trusted_model_paths_only: bool = False
     executor: CommandExecutor | None = None
+    prepare_executor: bool = True
 
 
 def default_skill_dirs(workspace: Path) -> list[Path]:
@@ -222,9 +223,11 @@ def _ensure_executor(
     config: RuntimeConfig,
     repo_config: RepoConfig,
     run_id: str,
-) -> CommandExecutor:
+) -> CommandExecutor | None:
     if config.executor is not None:
         return config.executor
+    if not config.prepare_executor:
+        return None
     try:
         identity = normalize_run_id(run_id)
     except ValueError:
