@@ -228,6 +228,7 @@ class ApplyPatchTool(Tool):
     """Apply a unified diff to the workspace (create/modify/delete files)."""
 
     name = "apply_patch"
+    capabilities = frozenset({"write_fs"})
     description = (
         "Apply a unified diff (git-style) to the workspace. Supports modifying, "
         "creating (--- /dev/null) and deleting (+++ /dev/null) files. The patch is "

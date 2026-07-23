@@ -19,10 +19,18 @@ dev = [
     "pytest>=8.0",
     "mypy>=1.8",
     "types-PyYAML",
+    "starlette>=1.3.1",
+    "uvicorn>=0.51.0",
+    "httpx2>=2.7.0",
+]
+service = [
+    "starlette>=1.3.1",
+    "uvicorn>=0.51.0",
 ]
 
 [project.scripts]
 gca = "gca.cli:main"
+gca-service = "gca_service.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -44,5 +52,5 @@ markers = [
 [tool.mypy]
 python_version = "3.10"
 mypy_path = "src"
-packages = ["gca"]
+packages = ["gca", "gca_service"]
 ignore_missing_imports = true

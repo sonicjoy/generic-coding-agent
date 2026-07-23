@@ -89,6 +89,7 @@ class SubmitPlanTool(Tool):
     """Complete planning with a structured implementation plan."""
 
     name = FINISH_TOOL_NAME
+    capabilities = frozenset({"control"})
     description = (
         "Complete the planning phase. Supply a detailed implementation and verification "
         "plan for the implementation agent."
@@ -112,6 +113,7 @@ class SubmitReviewTool(Tool):
     """Complete review with an approval or requested changes."""
 
     name = FINISH_TOOL_NAME
+    capabilities = frozenset({"control"})
     description = (
         "Complete the review phase with a structured verdict. Approve only after "
         "inspecting the implementation and running relevant checks."

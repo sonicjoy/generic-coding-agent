@@ -14,8 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from gca.frontmatter import FrontmatterError, split_frontmatter
 from gca.tools.base import Tool, ToolContext, ToolResult
 
 _SKILL_FILENAME = "SKILL.md"
@@ -40,13 +39,7 @@ class Skill:
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Split a ``---`` delimited YAML frontmatter block from the body."""
 
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) == 3:
-            meta = yaml.safe_load(parts[1]) or {}
-            if isinstance(meta, dict):
-                return meta, parts[2]
-    return {}, text
+    return split_frontmatter(text)
 
 
 class SkillRegistry:
@@ -61,11 +54,14 @@ class SkillRegistry:
     def discover(cls, roots: list[Path]) -> SkillRegistry:
         registry = cls()
         for root in roots:
-            root = Path(root)
+            root = Path(root).resolve()
             if not root.is_dir():
                 continue
             for skill_file in sorted(root.rglob(_SKILL_FILENAME)):
-                skill = _load_skill_file(skill_file)
+                resolved = skill_file.resolve()
+                if root not in resolved.parents:
+                    continue
+                skill = _load_skill_file(resolved)
                 if skill is not None:
                     registry._skills[skill.name] = skill
         return registry
@@ -95,6 +91,7 @@ class LoadSkillTool(Tool):
     """Load the full body of a named skill on demand."""
 
     name = "load_skill"
+    capabilities = frozenset({"knowledge"})
     description = (
         "Load the full instructions for a named skill. Call this when a task matches "
         "a skill's description to retrieve its step-by-step procedure."
@@ -114,6 +111,10 @@ class LoadSkillTool(Tool):
         if skill is None:
             available = ", ".join(self._registry.names()) or "(none)"
             return ToolResult.failure(f"unknown skill: {name}. Available: {available}")
+        if skill.path.stat().st_size > ctx.execution.max_read_bytes:
+            return ToolResult.failure(
+                f"skill exceeds read limit ({ctx.execution.max_read_bytes} bytes): {name}"
+            )
         return ToolResult.success(skill.body())
 
 
@@ -122,7 +123,10 @@ def _load_skill_file(path: Path) -> Skill | None:
         text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return None
-    meta, _ = _split_frontmatter(text)
+    try:
+        meta, _ = _split_frontmatter(text)
+    except FrontmatterError:
+        return None
     name = str(meta.get("name") or path.parent.name)
     description = str(meta.get("description") or "").strip()
     return Skill(name=name, description=description, path=path)

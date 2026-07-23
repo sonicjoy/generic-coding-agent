@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from gca.providers.base import Message
 from gca.session import (
     STATUS_COMPLETED,
@@ -64,3 +66,10 @@ def test_loads_legacy_session_without_workflow_fields() -> None:
     assert session.schema_version == 0
     assert session.workflow is None
     assert session.agent_runs == []
+
+
+def test_session_store_rejects_path_traversal_ids(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+
+    with pytest.raises(ValueError, match="invalid characters"):
+        store.load("../../outside")

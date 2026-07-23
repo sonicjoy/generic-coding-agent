@@ -15,7 +15,35 @@ import uuid
 from typing import Any
 from urllib.parse import urljoin
 
-from gca.providers.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
+from gca.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    Message,
+    ProviderError,
+    ToolCall,
+    ToolSpec,
+)
+
+_MAX_RESPONSE_BYTES = 10_000_000
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def _open_url(request: urllib.request.Request, timeout: int) -> Any:
+    """Open a provider request without forwarding credentials through redirects."""
+
+    return urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout)
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -79,13 +107,31 @@ class OpenAICompatibleProvider(LLMProvider):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                data = json.loads(response.read().decode())
+            with _open_url(request, self.timeout) as response:
+                raw = response.read(_MAX_RESPONSE_BYTES + 1)
+                if len(raw) > _MAX_RESPONSE_BYTES:
+                    raise ProviderError("LLM response exceeded 10 MB")
+                data = json.loads(raw.decode())
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
-            raise RuntimeError(f"LLM HTTP {exc.code} for {self.model_id}: {body}") from exc
+            body = exc.read(20_001).decode(errors="replace")[:20_000]
+            body = body.replace(api_key, "[REDACTED]")
+            retryable = exc.code in {408, 409, 425, 429} or exc.code >= 500
+            raise ProviderError(
+                f"LLM HTTP {exc.code} for {self.model_id}: {body}",
+                retryable=retryable,
+            ) from exc
+        except (TimeoutError, urllib.error.URLError) as exc:
+            raise ProviderError(
+                f"LLM transport error for {self.model_id}: {exc}",
+                retryable=True,
+            ) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProviderError(f"invalid LLM response for {self.model_id}: {exc}") from exc
 
-        choice = data["choices"][0]["message"]
+        try:
+            choice = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(f"LLM response for {self.model_id} has no message choice") from exc
         content = _normalize_content(choice.get("content"))
         tool_calls: list[ToolCall] = []
         for raw in choice.get("tool_calls") or []:

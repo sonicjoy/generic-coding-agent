@@ -1,5 +1,7 @@
 # Example declarative model catalog.
-# Copy to models.yaml (project) or ~/.gca/models.yaml (user).
+# Prefer the ready-to-copy pair under examples/templates/ for project setup
+# (AGENTS.md + models.yaml). You can also copy this file alone to models.yaml
+# (project) or ~/.gca/models.yaml (user).
 # API keys stay in environment variables / .env files — never in this file.
 
 providers:

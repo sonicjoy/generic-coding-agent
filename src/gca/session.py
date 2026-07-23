@@ -9,6 +9,7 @@ continuously). :class:`SessionStore` handles create / save / load / list.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -84,6 +85,7 @@ class WorkflowState:
     provider_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     registry_fingerprint: str = ""
     policy_fingerprint: str = ""
+    config_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize workflow state."""
@@ -101,6 +103,7 @@ class WorkflowState:
             "provider_states": self.provider_states,
             "registry_fingerprint": self.registry_fingerprint,
             "policy_fingerprint": self.policy_fingerprint,
+            "config_fingerprint": self.config_fingerprint,
         }
 
     @classmethod
@@ -125,6 +128,7 @@ class WorkflowState:
             provider_states=provider_states,
             registry_fingerprint=str(data.get("registry_fingerprint", "")),
             policy_fingerprint=str(data.get("policy_fingerprint", "")),
+            config_fingerprint=str(data.get("config_fingerprint", "")),
         )
 
 
@@ -202,6 +206,8 @@ class SessionStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, session_id: str) -> Path:
+        if re.fullmatch(r"[A-Za-z0-9_-]+", session_id) is None:
+            raise ValueError("session_id contains invalid characters")
         return self.root / f"{session_id}.json"
 
     def create(self, task: str) -> Session:
@@ -211,7 +217,17 @@ class SessionStore:
 
     def save(self, session: Session) -> None:
         session.touch()
-        self._path(session.id).write_text(json.dumps(session.to_dict(), indent=2), encoding="utf-8")
+        path = self._path(session.id)
+        temporary = self.root / f".{session.id}.{uuid.uuid4().hex}.tmp"
+        try:
+            temporary.write_text(
+                json.dumps(session.to_dict(), indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
     def load(self, session_id: str) -> Session:
         path = self._path(session_id)

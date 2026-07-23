@@ -9,15 +9,26 @@ arguments matching the schema.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from gca.credentials import CredentialBroker
 from gca.providers.base import ToolSpec
 
 
 class ToolError(Exception):
     """Raised when a tool cannot complete a request (reported back to the model)."""
+
+
+@dataclass
+class ExecutionPolicy:
+    """Hard runtime limits shared by all tools."""
+
+    profile: str = "local"
+    max_tool_timeout: int = 300
+    max_output_chars: int = 20_000
+    max_read_bytes: int = 1_000_000
 
 
 @dataclass
@@ -29,15 +40,67 @@ class ToolContext:
     """
 
     workspace: Path
+    phase: str = "execute"
+    audit_id: str = ""
+    allowed_tools: frozenset[str] | None = None
+    allowed_secrets: frozenset[str] = frozenset()
+    tool_secret_access: dict[str, frozenset[str]] = field(default_factory=dict)
+    current_tool: str = ""
+    execution: ExecutionPolicy = field(default_factory=ExecutionPolicy)
+    credentials: CredentialBroker = field(default_factory=CredentialBroker.from_environment)
 
     def resolve(self, relative: str) -> Path:
         """Resolve ``relative`` under the workspace, rejecting path escapes."""
 
-        target = (self.workspace / relative).resolve()
+        requested = Path(relative)
+        target = (self.workspace / requested).resolve()
         root = self.workspace.resolve()
         if target != root and root not in target.parents:
             raise ToolError(f"path escapes workspace: {relative!r}")
+        if _is_protected_path(requested.parts) or (
+            target != root and _is_protected_path(target.relative_to(root).parts)
+        ):
+            raise ToolError(f"path is protected from agent tools: {relative!r}")
+        if self.execution.profile == "hosted" and target != root:
+            normalized = target.relative_to(root).parts
+            if normalized == (".gca", "config.yaml"):
+                raise ToolError("hosted repository policy is immutable during a run")
         return target
+
+    def allows(self, tool_name: str) -> bool:
+        """Return whether the current phase permits ``tool_name``."""
+
+        return self.allowed_tools is None or tool_name in self.allowed_tools
+
+    def secret(self, name: str) -> str:
+        """Return an authorized secret without exposing the broker directly."""
+
+        try:
+            return self.credentials.get(name, allowed=self.allowed_secrets)
+        except (KeyError, PermissionError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    def for_tool(self, name: str) -> ToolContext:
+        """Return a context narrowed to one tool's declared secret access."""
+
+        return replace(
+            self,
+            current_tool=name,
+            allowed_secrets=self.tool_secret_access.get(name, frozenset()),
+        )
+
+    def subprocess_env(self, *, allowed_keys: frozenset[str] = frozenset()) -> dict[str, str]:
+        """Return a credential-sanitized subprocess environment."""
+
+        return self.credentials.subprocess_env(
+            self.execution.profile,
+            allowed_keys=allowed_keys,
+        )
+
+    def redact(self, text: str) -> str:
+        """Redact known secrets from model-facing or persisted output."""
+
+        return self.credentials.redact(text)
 
 
 @dataclass
@@ -62,6 +125,8 @@ class Tool(ABC):
     name: str = ""
     description: str = ""
     parameters: dict[str, Any] = {}
+    capabilities: frozenset[str] = frozenset()
+    risk: str = "low"
 
     def spec(self) -> ToolSpec:
         return ToolSpec(name=self.name, description=self.description, parameters=self.parameters)
@@ -106,3 +171,18 @@ class ToolRegistry:
 
     def __contains__(self, name: object) -> bool:
         return name in self._tools
+
+
+def _is_protected_path(parts: tuple[str, ...]) -> bool:
+    normalized = tuple(part for part in parts if part not in {"", "."})
+    if ".git" in normalized:
+        return True
+    if len(normalized) >= 2 and normalized[:2] in {
+        (".gca", "sessions"),
+        (".gca", "jobs"),
+    }:
+        return True
+    return any(
+        part == ".env" or (part.startswith(".env.") and part != ".env.example")
+        for part in normalized
+    )

@@ -5,9 +5,10 @@ Guidance for humans and AI agents working in the `generic-coding-agent` repo.
 ## Overview
 
 `generic-coding-agent` is a provider-agnostic, pluggable coding-agent harness.
-The core loop, tools, sessions, patch engine, `AGENTS.md` ingestion, skills, and
-plugin loading live under `src/gca/`. See `README.md` for the full layout and
-command reference.
+The core loop, tools, sessions, patch engine, repository manifests, jobs,
+integrations, `AGENTS.md` ingestion, skills, and plugin loading live under
+`src/gca/`. The optional ASGI API and worker live under `src/gca_service/`. See
+`README.md` for the full layout and command reference.
 
 ## Conventions
 
@@ -27,8 +28,9 @@ Defined in `pyproject.toml` / `README.md`:
 
 ## Cursor Cloud specific instructions
 
-- This is a pure Python project with no runtime services, database, or web
-  server — "running the app" means invoking the `gca` CLI (or `python -m gca`).
+- The default product remains a pure Python CLI (`gca` / `python -m gca`). The
+  optional `gca-service` extra provides a Starlette API, SQLite job store, and
+  separate worker; it has no external database requirement for local testing.
 - A virtualenv at `.venv` is the expected dev environment; activate it with
   `. .venv/bin/activate` before running `gca`, `pytest`, `ruff`, or `mypy`. The
   startup update script (re)creates `.venv` and installs the package editable
@@ -45,3 +47,5 @@ Defined in `pyproject.toml` / `README.md`:
    --skills examples/skills --script examples/demo_script.json`
 - Sessions persist as JSON under `<workspace>/.gca/sessions` by default (ignored
   by git). List with `gca sessions` and continue with `gca resume <id>`.
+- Service tests are offline and use Starlette's in-process test client, temporary
+  Git repositories, scripted providers, and fake SCM adapters.

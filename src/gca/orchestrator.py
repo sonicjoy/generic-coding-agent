@@ -7,8 +7,11 @@ from pathlib import Path
 
 from gca.agent import Agent, AgentConfig, AgentResult
 from gca.complexity import classify_task
+from gca.credentials import CredentialBroker
 from gca.models import ModelProfile, ModelRegistry
+from gca.personas import PersonaSet
 from gca.providers.base import Message
+from gca.repo_config import RepoConfig
 from gca.routing import WORKFLOW_FAST, RoutingPolicy
 from gca.session import (
     STATUS_ACTIVE,
@@ -20,7 +23,8 @@ from gca.session import (
     SessionStore,
     WorkflowState,
 )
-from gca.tools.base import ToolContext, ToolRegistry
+from gca.tool_policy import registry_for_phase
+from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
 from gca.tools.control import FINISH_TOOL_NAME
 from gca.workflows import (
     SubmitPlanTool,
@@ -70,6 +74,11 @@ class RunCoordinator:
         policy: RoutingPolicy,
         tools: ToolRegistry,
         system_prompt: str,
+        repo_config: RepoConfig,
+        execution_policy: ExecutionPolicy,
+        credentials: CredentialBroker,
+        personas: PersonaSet | None = None,
+        config_fingerprint: str = "",
         on_event: EventHook | None = None,
     ) -> None:
         self.workspace = workspace
@@ -79,6 +88,11 @@ class RunCoordinator:
         self.policy = policy
         self.tools = tools
         self.system_prompt = system_prompt
+        self.personas = personas or PersonaSet()
+        self.config_fingerprint = config_fingerprint
+        self.repo_config = repo_config
+        self.execution_policy = execution_policy
+        self.credentials = credentials
         self.on_event = on_event
 
     def run(self, session: Session, store: SessionStore) -> AgentResult:
@@ -135,6 +149,7 @@ class RunCoordinator:
             model_bindings=bindings,
             registry_fingerprint=self.models.fingerprint(),
             policy_fingerprint=self.policy.fingerprint(),
+            config_fingerprint=self.config_fingerprint,
         )
         if workflow_name != WORKFLOW_FAST and not session.messages:
             session.messages.append(Message(role="user", content=session.task))
@@ -170,6 +185,8 @@ class RunCoordinator:
             self._emit("[routing] warning: registered model metadata changed since session start")
         if workflow.policy_fingerprint and workflow.policy_fingerprint != self.policy.fingerprint():
             self._emit("[routing] warning: AGENTS.md routing changed; using saved model bindings")
+        if workflow.config_fingerprint and workflow.config_fingerprint != self.config_fingerprint:
+            self._emit("[routing] warning: repository configuration changed since session start")
         needed_roles = self._needed_model_roles(workflow)
         for role in needed_roles:
             model_name = workflow.model_bindings[role]
@@ -198,11 +215,12 @@ class RunCoordinator:
             session.messages.append(Message(role="system", content=self.system_prompt))
             session.messages.append(Message(role="user", content=session.task))
         self._emit(f"[routing] phase=execute model={model_name}")
+        registry = self._phase_tools("execute", workflow=workflow.name)
         result = Agent(
             provider=profile.provider,
-            registry=self.tools,
+            registry=registry,
             session=session,
-            context=ToolContext(workspace=self.workspace),
+            context=self._tool_context("execute", registry),
             store=store,
             config=AgentConfig(max_steps=self.max_steps),
             on_event=self.on_event,
@@ -347,11 +365,12 @@ class RunCoordinator:
         remaining = self.max_steps - parent.step_count
         phase_limit = child.step_count + remaining
         phase_store = _PhaseStore(parent, record, profile.name, store)
+        registry = self._phase_tools(phase, workflow=workflow.name)
         result = Agent(
             provider=profile.provider,
-            registry=self._phase_tools(phase),
+            registry=registry,
             session=child,
-            context=ToolContext(workspace=self.workspace),
+            context=self._tool_context(phase, registry),
             store=phase_store,
             config=AgentConfig(max_steps=phase_limit),
             on_event=self.on_event,
@@ -360,40 +379,32 @@ class RunCoordinator:
         phase_store.save(child)
         return result, record
 
-    def _phase_tools(self, phase: str) -> ToolRegistry:
-        spec = next(
-            phase_spec for phase_spec in get_workflow("feature").phases if phase_spec.name == phase
+    def _phase_tools(self, phase: str, *, workflow: str = "feature") -> ToolRegistry:
+        registry = registry_for_phase(
+            self.tools,
+            self.repo_config,
+            phase,
+            workflow=workflow,
         )
-        names = set(self.tools.names()) if spec.allowed_tools is None else set(spec.allowed_tools)
-        names.add(FINISH_TOOL_NAME)
-        registry = self.tools.subset(names)
         if phase == "planning":
             registry.register(SubmitPlanTool())
         elif phase == "review":
             registry.register(SubmitReviewTool())
         return registry
 
+    def _tool_context(self, phase: str, registry: ToolRegistry) -> ToolContext:
+        return ToolContext(
+            workspace=self.workspace,
+            phase=phase,
+            audit_id=phase,
+            allowed_tools=frozenset(registry.names()),
+            tool_secret_access=self.repo_config.tools.secret_access,
+            execution=self.execution_policy,
+            credentials=self.credentials,
+        )
+
     def _phase_system_prompt(self, phase: str) -> str:
-        if phase == "planning":
-            role = (
-                "You are the planning agent in a multi-agent feature workflow. Inspect the "
-                "workspace with read-only tools. Do not edit files or run commands. Produce "
-                "a concrete implementation and verification plan, then call finish(plan=...)."
-            )
-        elif phase == "implementation":
-            role = (
-                "You are the implementation agent in a multi-agent feature workflow. Follow "
-                "the approved plan and any review feedback. Edit only what the task requires, "
-                "run relevant checks, and call finish(summary=...) when implementation is ready "
-                "for independent review."
-            )
-        else:
-            role = (
-                "You are the independent review agent in a multi-agent feature workflow. "
-                "Do not modify files. Inspect the implementation and run relevant checks. "
-                "Call finish(verdict='approved'|'changes_requested', summary=...) with concrete "
-                "evidence or actionable findings."
-            )
+        role = self.personas.for_phase(phase)
         return f"{self.system_prompt}\n\nWorkflow role:\n{role}"
 
     def _phase_user_prompt(self, session: Session, phase: str) -> str:

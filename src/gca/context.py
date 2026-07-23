@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
+from gca.frontmatter import FrontmatterError, split_frontmatter
+from gca.paths import IGNORED_DIRS
 
 _CONTEXT_FILENAMES = ("AGENTS.md", "CLAUDE.md")
-_IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".gca"}
 
 
 class ContextConfigError(ValueError):
@@ -29,18 +29,25 @@ class ContextFile:
     content: str
 
 
-def discover_context_files(workspace: Path) -> list[ContextFile]:
+def discover_context_files(
+    workspace: Path,
+    *,
+    filenames: tuple[str, ...] = _CONTEXT_FILENAMES,
+) -> list[ContextFile]:
     """Find all context files under ``workspace``, ordered root-first (shallowest)."""
 
     workspace = Path(workspace).resolve()
     found: list[ContextFile] = []
     for path in sorted(workspace.rglob("*")):
-        if not path.is_file() or path.name not in _CONTEXT_FILENAMES:
+        if not path.is_file() or path.name not in filenames:
             continue
-        if any(part in _IGNORED_DIRS for part in path.relative_to(workspace).parts):
+        if any(part in IGNORED_DIRS for part in path.relative_to(workspace).parts):
+            continue
+        resolved = path.resolve()
+        if resolved != workspace and workspace not in resolved.parents:
             continue
         try:
-            content = path.read_text(encoding="utf-8")
+            content = resolved.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
         found.append(ContextFile(path=path, content=content))
@@ -49,21 +56,10 @@ def discover_context_files(workspace: Path) -> list[ContextFile]:
 
 
 def _frontmatter(content: str, path: Path) -> dict[str, Any]:
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    closing = next(
-        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
-        None,
-    )
-    if closing is None:
-        return {}
     try:
-        metadata = yaml.safe_load("\n".join(lines[1:closing])) or {}
-    except yaml.YAMLError as exc:
-        raise ContextConfigError(f"invalid YAML frontmatter in {path}: {exc}") from exc
-    if not isinstance(metadata, dict):
-        raise ContextConfigError(f"YAML frontmatter in {path} must be a mapping")
+        metadata, _ = split_frontmatter(content, source=path)
+    except FrontmatterError as exc:
+        raise ContextConfigError(str(exc)) from exc
     return metadata
 
 
@@ -93,15 +89,26 @@ def load_gca_config(workspace: Path) -> dict[str, Any]:
     return merged
 
 
-def build_context_prompt(workspace: Path) -> str:
+def build_context_prompt(
+    workspace: Path,
+    *,
+    filenames: tuple[str, ...] = _CONTEXT_FILENAMES,
+    include_frontmatter: bool = False,
+) -> str:
     """Return a single string merging all discovered context files, or ''."""
 
     workspace = Path(workspace).resolve()
-    files = discover_context_files(workspace)
+    files = discover_context_files(workspace, filenames=filenames)
     if not files:
         return ""
     blocks: list[str] = []
     for cf in files:
         rel = cf.path.relative_to(workspace)
-        blocks.append(f"--- Project instructions from {rel} ---\n{cf.content.strip()}")
+        content = cf.content
+        if not include_frontmatter:
+            try:
+                _, content = split_frontmatter(content, source=cf.path)
+            except FrontmatterError as exc:
+                raise ContextConfigError(str(exc)) from exc
+        blocks.append(f"--- Project instructions from {rel} ---\n{content.strip()}")
     return "\n\n".join(blocks)

@@ -144,7 +144,7 @@ def test_openai_compatible_parses_tool_calls(
     }
 
     class FakeResponse:
-        def read(self) -> bytes:
+        def read(self, size: int = -1) -> bytes:
             return json.dumps(payload).encode()
 
         def __enter__(self) -> FakeResponse:
@@ -157,7 +157,7 @@ def test_openai_compatible_parses_tool_calls(
         return FakeResponse()
 
     monkeypatch.setenv("TEST_API_KEY", "secret")
-    monkeypatch.setattr("gca.providers.openai_compatible.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("gca.providers.openai_compatible._open_url", fake_urlopen)
 
     provider = OpenAICompatibleProvider(
         model_id="test-model",
@@ -168,3 +168,42 @@ def test_openai_compatible_parses_tool_calls(
     assert response.content == "Working"
     assert response.tool_calls[0].name == "finish"
     assert response.tool_calls[0].arguments == {"summary": "done"}
+
+
+@pytest.mark.parametrize(
+    ("provider_config", "message"),
+    [
+        (
+            "base_url: https://user@example.test/v1\n    api_key_env: TEST_KEY",
+            "must not contain credentials",
+        ),
+        (
+            "base_url: https://example.test/v1?token=x\n    api_key_env: TEST_KEY",
+            "must not contain credentials",
+        ),
+        (
+            "base_url: https://example.test/v1\n    api_key_env: invalid-name",
+            "valid environment name",
+        ),
+        (
+            "base_url: https://example.test/v1\n"
+            "    api_key_env: TEST_KEY\n"
+            "    headers:\n"
+            "      Authorization: committed-secret",
+            "secret-bearing names",
+        ),
+    ],
+)
+def test_rejects_secret_bearing_provider_configuration(
+    tmp_path: Path,
+    provider_config: str,
+    message: str,
+) -> None:
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        f"providers:\n  unsafe:\n    {provider_config}\nmodels: {{}}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelConfigError, match=message):
+        load_model_catalog([path])

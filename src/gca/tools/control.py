@@ -13,6 +13,7 @@ class FinishTool(Tool):
     """Signal that the task is complete. Calling this stops the agent loop."""
 
     name = FINISH_TOOL_NAME
+    capabilities = frozenset({"control"})
     description = (
         "Call this when the task is fully complete. Provide a short summary of what "
         "was done. Invoking this ends the session successfully."

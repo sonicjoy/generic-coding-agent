@@ -30,9 +30,12 @@ class RecordingScriptedProvider(ScriptedProvider):
     def __init__(self, steps: list[LLMResponse], final_text: str = "Done.") -> None:
         super().__init__(steps, final_text)
         self.tool_names_per_call: list[set[str]] = []
+        self.system_prompts: list[str] = []
 
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         self.tool_names_per_call.append({tool.name for tool in tools})
+        system = next((message.content for message in messages if message.role == "system"), "")
+        self.system_prompts.append(system)
         return super().complete(messages, tools)
 
     @property
@@ -81,6 +84,8 @@ class EvalScenario:
     max_steps: int = 25
     resume_max_steps: int | None = None
     agents_md: str | None = None
+    config_yaml: str | None = None
+    initial_files: dict[str, str] = field(default_factory=dict)
     scripts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     model_profiles: list[dict[str, Any]] = field(default_factory=list)
     expect: dict[str, Any] = field(default_factory=dict)
@@ -116,6 +121,12 @@ def load_scenario(path: Path) -> EvalScenario:
     expect = raw.get("expect", {})
     if not isinstance(expect, Mapping):
         raise ValueError(f"scenario {path} expect must be a mapping")
+    initial_files = raw.get("initial_files", {})
+    if not isinstance(initial_files, Mapping):
+        raise ValueError(f"scenario {path} initial_files must be a mapping")
+    config_yaml = raw.get("config_yaml")
+    if config_yaml is not None and not isinstance(config_yaml, str):
+        raise ValueError(f"scenario {path} config_yaml must be a string")
     return EvalScenario(
         id=scenario_id,
         task=task,
@@ -127,6 +138,8 @@ def load_scenario(path: Path) -> EvalScenario:
             int(raw["resume_max_steps"]) if raw.get("resume_max_steps") is not None else None
         ),
         agents_md=raw.get("agents_md"),
+        config_yaml=config_yaml,
+        initial_files={str(relative): str(content) for relative, content in initial_files.items()},
         scripts={str(name): list(steps) for name, steps in scripts.items()},
         model_profiles=[dict(profile) for profile in profiles],
         expect=dict(expect),
@@ -140,6 +153,14 @@ def run_scenario(scenario: EvalScenario, workspace: Path) -> EvalResult:
     workspace.mkdir(parents=True, exist_ok=True)
     if scenario.agents_md:
         (workspace / "AGENTS.md").write_text(scenario.agents_md, encoding="utf-8")
+    if scenario.config_yaml:
+        config_path = workspace / ".gca" / "config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(scenario.config_yaml, encoding="utf-8")
+    for relative, content in scenario.initial_files.items():
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
     sessions_dir = workspace / ".gca" / "sessions"
     store = SessionStore(sessions_dir)
@@ -167,6 +188,7 @@ def run_scenario(scenario: EvalScenario, workspace: Path) -> EvalResult:
 
     checks = _score(scenario, workspace, session, result.status, result.steps, result.final_message)
     checks.extend(_score_tool_exposure(scenario, providers))
+    checks.extend(_score_system_prompts(scenario, providers))
     checks.extend(_score_script_calls(scenario, providers))
     checks.extend(_score_script_consumption(scenario, providers))
     return EvalResult(
@@ -285,6 +307,38 @@ def _score_script_calls(
         checks.append(
             EvalCheck(label, actual == int(count), f"expected {count} call(s), got {actual}")
         )
+    return checks
+
+
+def _score_system_prompts(
+    scenario: EvalScenario,
+    providers: dict[str, RecordingScriptedProvider],
+) -> list[EvalCheck]:
+    """Score required and forbidden text in model-facing system prompts."""
+
+    required = scenario.expect.get("system_contains", [])
+    forbidden = scenario.expect.get("system_excludes", [])
+    if not isinstance(required, list) or not isinstance(forbidden, list):
+        return [EvalCheck("system_prompts", False, "system prompt rules must be lists")]
+    prompts = "\n".join(
+        prompt for provider in providers.values() for prompt in provider.system_prompts
+    )
+    checks = [
+        EvalCheck(
+            f"system_contains:{needle}",
+            str(needle) in prompts,
+            f"system prompts missing {needle!r}",
+        )
+        for needle in required
+    ]
+    checks.extend(
+        EvalCheck(
+            f"system_excludes:{needle}",
+            str(needle) not in prompts,
+            f"system prompts unexpectedly contain {needle!r}",
+        )
+        for needle in forbidden
+    )
     return checks
 
 

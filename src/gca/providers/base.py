@@ -13,6 +13,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+class ProviderError(RuntimeError):
+    """Provider failure with retry classification for hosted jobs."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
 @dataclass
 class ToolCall:
     """A request from the model to invoke a tool with JSON arguments."""
