@@ -530,6 +530,10 @@ publication:
   auto_merge: false
 ```
 
+When `required_checks` is omitted, publication still runs a default
+`python -m compileall` over changed `.py` files through the isolation executor
+so unparseable Python cannot be pushed.
+
 The bundled SQLite store supports a single node with multiple worker processes
 and serializes jobs targeting the same repository. Deployments with ephemeral
 filesystems or horizontal nodes must provide durable shared storage and a
