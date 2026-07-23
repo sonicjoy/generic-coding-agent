@@ -46,3 +46,33 @@ def test_fallback_provider_does_not_advance_on_non_retryable_error() -> None:
         provider.complete([], [])
     assert provider.active_name == "fable"
     assert secondary.calls == 0
+
+
+def test_fallback_provider_restores_by_active_name() -> None:
+    primary = _SequenceProvider(content="fable")
+    secondary = _SequenceProvider(content="opus")
+    provider = FallbackProvider([("fable", primary), ("opus", secondary)])
+    provider.complete([], [])
+    provider._index = 1  # noqa: SLF001 - simulate prior failover
+    state = provider.get_state()
+    assert state["active_name"] == "opus"
+
+    # Rebuild chain starting at the bound primary (opus only remaining prefs).
+    resumed = FallbackProvider([("opus", secondary), ("unused", primary)])
+    resumed.set_state(state)
+    assert resumed.active_name == "opus"
+
+
+def test_fallback_provider_forwards_bare_provider_state() -> None:
+    class Stateful(_SequenceProvider):
+        def __init__(self) -> None:
+            super().__init__(content="ok")
+            self.restored: dict | None = None
+
+        def set_state(self, state: dict) -> None:
+            self.restored = state
+
+    primary = Stateful()
+    provider = FallbackProvider([("fable", primary)])
+    provider.set_state({"index": 3})
+    assert primary.restored == {"index": 3}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any
 
 from gca.providers.base import LLMProvider, LLMResponse, Message, ProviderError, ToolSpec
 
@@ -55,8 +56,8 @@ class FallbackProvider(LLMProvider):
                     self._on_failover(name, nxt_name, str(exc))
                 self._index += 1
 
-    def get_state(self) -> dict:
-        """Persist active index plus the active provider's own state."""
+    def get_state(self) -> dict[str, Any]:
+        """Persist active model plus the active provider's own state."""
 
         _, provider = self._chain[self._index]
         return {
@@ -65,13 +66,34 @@ class FallbackProvider(LLMProvider):
             "provider_state": provider.get_state(),
         }
 
-    def set_state(self, state: dict) -> None:
-        """Restore failover index and the active provider's state."""
+    def set_state(self, state: dict[str, Any]) -> None:
+        """Restore failover position and the active provider's state.
 
-        raw_index = state.get("fallback_index", 0)
-        if isinstance(raw_index, bool) or not isinstance(raw_index, int):
-            raw_index = 0
-        self._index = max(0, min(raw_index, len(self._chain) - 1))
+        Prefers ``active_name`` so resume stays on the model that last succeeded
+        even when the in-memory chain is rebuilt from the current binding.
+        Bare provider states (without wrapper keys) are forwarded to the active
+        provider for backward compatibility with pre-fallback sessions.
+        """
+
+        if not isinstance(state, dict):
+            return
+        wrapped = any(key in state for key in ("fallback_index", "active_name", "provider_state"))
+        if not wrapped:
+            self._chain[self._index][1].set_state(state)
+            return
+
+        active = state.get("active_name")
+        if isinstance(active, str) and active:
+            for index, (name, _) in enumerate(self._chain):
+                if name == active:
+                    self._index = index
+                    break
+        else:
+            raw_index = state.get("fallback_index", 0)
+            if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+                raw_index = 0
+            self._index = max(0, min(raw_index, len(self._chain) - 1))
+
         _, provider = self._chain[self._index]
         provider_state = state.get("provider_state", {})
         if isinstance(provider_state, dict):
