@@ -63,6 +63,28 @@ def test_run_can_be_cancelled_before_claim(tmp_path: Path) -> None:
     assert response.json()["status"] == "cancelled"
 
 
+def test_running_job_can_be_requeued_and_exposes_lease(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    state = ServiceState.build(settings)
+    client = TestClient(create_app(state=state))
+    headers = {"Authorization": "Bearer api-token-123456"}
+    created = client.post("/runs", json=_run_payload(), headers=headers).json()
+    claimed = state.queue.claim(settings.worker_id, lease_seconds=1800)
+    assert claimed is not None
+    assert claimed.id == created["id"]
+
+    status = client.get(f"/runs/{created['id']}", headers=headers)
+    assert status.status_code == 200
+    assert status.json()["lease_owner"] == settings.worker_id
+    assert status.json()["lease_expires_at"] is not None
+
+    response = client.post(f"/runs/{created['id']}/requeue", headers=headers)
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
+    assert response.json()["lease_owner"] is None
+
+
 def test_run_rejects_unallowlisted_repository(tmp_path: Path) -> None:
     client = TestClient(create_app(_settings(tmp_path)))
     payload = _run_payload()

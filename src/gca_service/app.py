@@ -16,7 +16,7 @@ from gca_service.routes.issue_sessions import (
     list_issue_sessions,
     retry_issue_session,
 )
-from gca_service.routes.runs import cancel_run, create_run, get_run, resume_run
+from gca_service.routes.runs import cancel_run, create_run, get_run, requeue_run, resume_run
 from gca_service.routes.webhooks import receive_gitlab_registered_webhook, receive_webhook
 from gca_service.state import ServiceState
 
@@ -37,6 +37,7 @@ def create_app(
             Route("/runs", create_run, methods=["POST"]),
             Route("/runs/{job_id}", get_run, methods=["GET"]),
             Route("/runs/{job_id}/cancel", cancel_run, methods=["POST"]),
+            Route("/runs/{job_id}/requeue", requeue_run, methods=["POST"]),
             Route("/runs/{job_id}/resume", resume_run, methods=["POST"]),
             Route("/issue-sessions", list_issue_sessions, methods=["GET"]),
             Route("/issue-sessions", create_issue_session, methods=["POST"]),

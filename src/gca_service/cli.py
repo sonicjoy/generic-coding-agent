@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import signal
+import threading
 
 import uvicorn
 
@@ -58,7 +60,17 @@ def _worker(args: argparse.Namespace) -> int:
                 line = f"{line}: {job.last_error}"
             _emit(line)
         return 0 if job is None or job.status.value == "completed" else 1
-    worker.run_forever()
+    stop = threading.Event()
+
+    def _shutdown(signum: int, frame: object) -> None:
+        _ = frame
+        _emit(f"[worker] event=shutdown signal={signum}")
+        worker.release_active_lease()
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+    worker.run_forever(stop=stop)
     return 0
 
 

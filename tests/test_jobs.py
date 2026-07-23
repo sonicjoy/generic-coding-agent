@@ -89,6 +89,40 @@ def test_expired_lease_is_requeued(tmp_path: Path) -> None:
     assert recovered.attempt == 2
 
 
+def test_release_lease_allows_immediate_reclaim(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(_spec())
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker-a", lease_seconds=1800)
+    assert claimed is not None
+
+    released = store.release_lease(claimed.id, "worker-a")
+
+    assert released is not None
+    assert released.status == JobStatus.QUEUED
+    assert released.lease_owner is None
+    recovered = queue.claim("worker-b", lease_seconds=60)
+    assert recovered is not None
+    assert recovered.id == claimed.id
+    assert recovered.lease_owner == "worker-b"
+
+
+def test_force_requeue_clears_foreign_lease(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(_spec())
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker-a", lease_seconds=1800)
+    assert claimed is not None
+
+    requeued = store.force_requeue(claimed.id)
+
+    assert requeued.status == JobStatus.QUEUED
+    assert requeued.lease_owner is None
+    assert "operator requeue" in requeued.last_error
+
+
 def test_lifecycle_rejects_invalid_transition(tmp_path: Path) -> None:
     store = SqliteJobStore(tmp_path / "jobs.sqlite3")
     job = store.create(_spec())

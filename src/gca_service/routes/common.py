@@ -126,10 +126,15 @@ def job_payload(job: Job) -> dict[str, Any]:
         "last_error": job.last_error,
         "labels": job.run_spec.labels,
         "max_steps": job.run_spec.max_steps,
+<<<<<<< HEAD
         "llm_usage": usage,
         "tokens_in": int(usage.get("prompt_tokens", 0) or 0),
         "tokens_out": int(usage.get("completion_tokens", 0) or 0),
         "cost_usd": float(usage.get("cost_usd", 0) or 0),
+=======
+        "lease_owner": job.lease_owner,
+        "lease_expires_at": job.lease_expires_at,
+>>>>>>> 21f756d (feat: reclaim worker leases on shutdown and via API (#48))
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }

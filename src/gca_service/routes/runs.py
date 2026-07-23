@@ -11,6 +11,7 @@ from gca.jobs.lifecycle import JobTransitionError, transition_job
 from gca.jobs.models import JobStatus, RunSpec
 from gca.jobs.store import (
     IdempotencyConflictError,
+    JobConcurrencyError,
     JobNotFoundError,
 )
 from gca.workspace.prepare import WorkspaceError, validate_repository_spec
@@ -106,6 +107,22 @@ async def cancel_run(request: Request) -> JSONResponse:
     except JobTransitionError as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
     return JSONResponse(job_payload(job))
+
+
+async def requeue_run(request: Request) -> JSONResponse:
+    """Clear a stuck running/publishing lease and return the job to the queue."""
+
+    unauthorized = require_auth(request)
+    if unauthorized is not None:
+        return unauthorized
+    state = service_state(request)
+    try:
+        job = state.store.force_requeue(request.path_params["job_id"])
+    except JobNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except JobConcurrencyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(job_payload(job), status_code=202)
 
 
 async def resume_run(request: Request) -> JSONResponse:

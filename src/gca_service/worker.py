@@ -100,6 +100,8 @@ class ServiceWorker:
         self.model_loader = model_loader
         self.outbox_processor = outbox_processor or _default_outbox(state)
         self._idle_ticks = 0
+        self._active_job_id: str | None = None
+        self._active_lock = threading.Lock()
 
     def run_once(self) -> Job | None:
         """Claim and execute one due job, returning ``None`` when idle."""
@@ -121,6 +123,7 @@ class ServiceWorker:
                 ).run()
             return None
         self._idle_ticks = 0
+<<<<<<< HEAD
         self._emit(
             structured_event(
                 "worker",
@@ -136,6 +139,10 @@ class ServiceWorker:
                 source=job.run_spec.labels.get("source"),
             )
         )
+=======
+        with self._active_lock:
+            self._active_job_id = job.id
+>>>>>>> 21f756d (feat: reclaim worker leases on shutdown and via API (#48))
 
         def clone_credentials(repository: RepositorySpec) -> GitCredentials | None:
             host = repository_host(repository.url)
@@ -153,6 +160,7 @@ class ServiceWorker:
         except ValueError:
             tool_secret_grants = {}
 
+<<<<<<< HEAD
         announce_github_issue_start(job, settings, on_event=self.on_event)
 
         with _LeaseKeeper(self.state, job) as lease:
@@ -186,6 +194,49 @@ class ServiceWorker:
                 )
             )
             return result
+=======
+        try:
+            with _LeaseKeeper(self.state, job) as lease:
+                runner = JobRunner(
+                    store=self.state.store,
+                    workspace_root=settings.workspace_root,
+                    model_loader=self.model_loader,
+                    publisher=_publisher(self.state),
+                    allowed_repository_hosts=settings.allowed_repository_hosts,
+                    allow_local_repositories=settings.allow_local_repositories,
+                    hosted_mode=True,
+                    plugin_dir=settings.plugin_dir,
+                    model_paths=list(settings.model_paths) or None,
+                    on_event=self.on_event,
+                    lease_heartbeat=lambda active: lease.touch(),
+                    repository_credentials=clone_credentials,
+                    allowed_tool_secret_grants=tool_secret_grants,
+                )
+                result = runner.execute(job)
+                self._finalize_issue_turn(result)
+                self.outbox_processor.process_pending()
+                lease.check()
+                return result
+        finally:
+            with self._active_lock:
+                if self._active_job_id == job.id:
+                    self._active_job_id = None
+
+    def release_active_lease(self) -> Job | None:
+        """Best-effort requeue of the in-flight job (SIGTERM / operator stop)."""
+
+        with self._active_lock:
+            job_id = self._active_job_id
+        if not job_id:
+            return None
+        released = self.state.store.release_lease(job_id, self.state.settings.worker_id)
+        if released is not None and self.on_event is not None:
+            self.on_event(
+                f"[worker] event=lease_released job_id={released.id} "
+                f"status={released.status.value}"
+            )
+        return released
+>>>>>>> 21f756d (feat: reclaim worker leases on shutdown and via API (#48))
 
     def _emit(self, message: str) -> None:
         if self.on_event is not None:

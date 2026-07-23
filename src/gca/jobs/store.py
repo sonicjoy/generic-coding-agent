@@ -352,6 +352,83 @@ class SqliteJobStore:
             if cursor.rowcount != 1:
                 raise JobConcurrencyError(f"worker lost job lease: {job_id}")
 
+    def release_lease(self, job_id: str, worker_id: str) -> Job | None:
+        """Requeue a running/publishing job held by ``worker_id`` (best-effort).
+
+        Used on graceful worker shutdown so a replacement worker can reclaim
+        without waiting for lease TTL or manual SQLite edits.
+        """
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT data FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            job = Job.from_dict(json.loads(str(row["data"])))
+            if (
+                job.status not in {JobStatus.RUNNING, JobStatus.PUBLISHING}
+                or job.lease_owner != worker_id
+            ):
+                connection.commit()
+                return None
+            job.status = JobStatus.QUEUED if job.attempt < job.max_attempts else JobStatus.FAILED
+            if job.status == JobStatus.FAILED:
+                job.last_error = "worker released lease after final attempt"
+            else:
+                job.last_error = "worker released lease on shutdown"
+            job.lease_owner = None
+            job.lease_expires_at = None
+            job.updated_at = utc_now()
+            next_version = job.version + 1
+            payload = job.to_dict()
+            payload["version"] = next_version
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?, data = ?, version = ?, lease_owner = NULL,
+                    lease_expires_at = NULL, updated_at = ?
+                WHERE id = ? AND version = ? AND lease_owner = ?
+                """,
+                (
+                    job.status.value,
+                    json.dumps(payload, sort_keys=True),
+                    next_version,
+                    job.updated_at,
+                    job.id,
+                    job.version,
+                    worker_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                return None
+            connection.commit()
+            job.version = next_version
+            return job
+
+    def force_requeue(self, job_id: str) -> Job:
+        """Operator reclaim: clear lease and return a running job to the queue."""
+
+        job = self.load(job_id)
+        if job.status not in {JobStatus.RUNNING, JobStatus.PUBLISHING}:
+            raise JobConcurrencyError(
+                f"job cannot be requeued from {job.status.value}; expected running or publishing"
+            )
+        job.status = JobStatus.QUEUED if job.attempt < job.max_attempts else JobStatus.FAILED
+        if job.status == JobStatus.FAILED:
+            job.last_error = "operator requeue after final attempt"
+        else:
+            job.last_error = "operator requeue cleared worker lease"
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.updated_at = utc_now()
+        self.save(job)
+        return job
+
     def _claim_row(
         self,
         connection: sqlite3.Connection,
