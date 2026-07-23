@@ -35,6 +35,7 @@ class ServiceSettings:
     gitlab_webhook_secret: str = field(default="", repr=False)
     github_token: str = field(default="", repr=False)
     gitlab_token: str = field(default="", repr=False)
+    publish_mode: str = "auto"
     github_api_url: str = "https://api.github.com"
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     github_host: str = "github.com"
@@ -86,6 +87,7 @@ class ServiceSettings:
             gitlab_webhook_secret=values.get("GCA_GITLAB_WEBHOOK_SECRET", ""),
             github_token=values.get("GCA_GITHUB_TOKEN", ""),
             gitlab_token=values.get("GCA_GITLAB_TOKEN", ""),
+            publish_mode=values.get("GCA_PUBLISH_MODE", "auto").strip().lower() or "auto",
             github_api_url=values.get("GCA_GITHUB_API_URL", "https://api.github.com"),
             gitlab_api_url=values.get("GCA_GITLAB_API_URL", "https://gitlab.com/api/v4"),
             github_host=values.get("GCA_GITHUB_HOST", "github.com").lower(),
@@ -140,6 +142,8 @@ class ServiceSettings:
             raise ServiceConfigError("api_token is required")
         if len(self.api_token) < 16:
             raise ServiceConfigError("api_token must be at least 16 characters")
+        if self.publish_mode not in {"auto", "off"}:
+            raise ServiceConfigError("GCA_PUBLISH_MODE must be 'auto' or 'off'")
         if not self.allowed_repository_hosts and not self.allow_local_repositories:
             raise ServiceConfigError(
                 "configure allowed_repository_hosts or explicitly allow local repositories"

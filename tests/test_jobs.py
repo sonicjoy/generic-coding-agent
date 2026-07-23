@@ -97,6 +97,20 @@ def test_lifecycle_rejects_invalid_transition(tmp_path: Path) -> None:
         transition_job(job, JobStatus.COMPLETED)
 
 
+def test_lifecycle_clears_stale_last_error_on_completed(tmp_path: Path) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    job = store.create(_spec())
+    transition_job(job, JobStatus.RUNNING)
+    transition_job(job, JobStatus.PAUSED, error="Step budget (19) exhausted.")
+    assert job.last_error.startswith("Step budget")
+
+    transition_job(job, JobStatus.QUEUED)
+    transition_job(job, JobStatus.RUNNING)
+    assert job.last_error == ""
+    transition_job(job, JobStatus.COMPLETED)
+    assert job.last_error == ""
+
+
 def test_queue_serializes_jobs_for_same_repository(tmp_path: Path) -> None:
     store = SqliteJobStore(tmp_path / "jobs.sqlite3")
     queue = SqliteJobQueue(store)

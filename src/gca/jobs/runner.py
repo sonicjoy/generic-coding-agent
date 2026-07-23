@@ -238,10 +238,19 @@ class JobRunner:
             self.store.save(job)
             return
         if self.publisher is None:
+            provider = job.run_spec.publication.provider
+            env_var = {
+                "github": "GCA_GITHUB_TOKEN",
+                "gitlab": "GCA_GITLAB_TOKEN",
+            }.get(provider)
+            error = (
+                f"publication to '{provider}' requested but no SCM publisher is configured"
+                + (f" (is {env_var} set?)" if env_var else "")
+            )
             transition_job(
                 job,
                 JobStatus.FAILED,
-                error="publication requested but no SCM publisher is configured",
+                error=error,
             )
             self.store.save(job)
             return

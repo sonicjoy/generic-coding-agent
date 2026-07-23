@@ -17,6 +17,14 @@ _DOCKER_MISSING = (
     "Docker Engine is required to run GCA. Install Docker and ensure the daemon "
     "is reachable (`docker info`), then retry."
 )
+_CGROUP_LIMIT_MARKERS = (
+    "cannot enter cgroup",
+    "cgroupv2",
+    "threaded mode",
+    "cannot set memory limit",
+    "failed to set up cgroup",
+    "unable to apply cgroup configuration",
+)
 
 
 class DockerExecutorError(RuntimeError):
@@ -45,6 +53,24 @@ def ensure_docker_available(*, timeout: int = 30) -> None:
         if detail:
             message = f"{message}\n{detail}"
         raise DockerExecutorError(message)
+
+
+def resource_limits_disabled() -> bool:
+    """Return whether Docker CPU/memory limits should be omitted."""
+
+    return os.environ.get("GCA_DOCKER_DISABLE_RESOURCE_LIMITS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def looks_like_cgroup_limit_failure(output: str) -> bool:
+    """Return whether Docker output indicates cgroup resource-limit failure."""
+
+    lowered = output.lower()
+    return any(marker in lowered for marker in _CGROUP_LIMIT_MARKERS)
 
 
 @dataclass
@@ -109,42 +135,51 @@ class DockerExecutor:
         env: Mapping[str, str],
         timeout: int,
     ) -> CommandResult:
-        """Run a command in a named container with CPU/memory limits."""
+        """Run a command in a named container with CPU/memory limits.
+
+        When cgroup resource limits cannot be applied (common on nested
+        cgroupv2 hosts), the same command is retried without ``--cpus`` /
+        ``--memory``. Set ``GCA_DOCKER_DISABLE_RESOURCE_LIMITS=1`` to skip
+        limits on every run.
+        """
 
         if not self._built:
             self.build()
         if (argv is None) == (shell_command is None):
             raise ValueError("provide exactly one of argv or shell_command")
 
+        with_limits = not resource_limits_disabled()
+        return self._run_once(
+            argv=argv,
+            shell_command=shell_command,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            with_limits=with_limits,
+            allow_retry=with_limits,
+        )
+
+    def _run_once(
+        self,
+        *,
+        argv: list[str] | None,
+        shell_command: str | None,
+        cwd: Path | None,
+        env: Mapping[str, str],
+        timeout: int,
+        with_limits: bool,
+        allow_retry: bool,
+    ) -> CommandResult:
         container = f"gca-run-{self.run_id}-{uuid.uuid4().hex[:8]}"
         workdir = self._container_cwd(cwd)
-        command = [
-            "docker",
-            "run",
-            "--name",
-            container,
-            "--rm",
-            "--cpus",
-            str(self.spec.cpu),
-            "--memory",
-            self.spec.memory,
-            "--user",
-            f"{os.getuid()}:{os.getgid()}",
-            "--network",
-            "bridge" if self.spec.network else "none",
-            "--workdir",
-            workdir,
-            "--mount",
-            f"type=bind,source={self.workspace},target={self.spec.working_dir}",
-        ]
-        for key, value in env.items():
-            command.extend(["--env", f"{key}={value}"])
-        command.append(self.image.tag)
-        if shell_command is not None:
-            command.extend(["bash", "-lc", shell_command])
-        else:
-            assert argv is not None
-            command.extend(argv)
+        command = self._build_run_command(
+            container=container,
+            workdir=workdir,
+            env=env,
+            argv=argv,
+            shell_command=shell_command,
+            with_limits=with_limits,
+        )
 
         self._active_containers.add(container)
         try:
@@ -162,7 +197,63 @@ class DockerExecutor:
             self._remove_container(container)
 
         output = (result.stdout or "") + (result.stderr or "")
+        if (
+            allow_retry
+            and with_limits
+            and result.returncode != 0
+            and looks_like_cgroup_limit_failure(output)
+        ):
+            return self._run_once(
+                argv=argv,
+                shell_command=shell_command,
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+                with_limits=False,
+                allow_retry=False,
+            )
         return CommandResult(returncode=result.returncode, output=output, timed_out=False)
+
+    def _build_run_command(
+        self,
+        *,
+        container: str,
+        workdir: str,
+        env: Mapping[str, str],
+        argv: list[str] | None,
+        shell_command: str | None,
+        with_limits: bool,
+    ) -> list[str]:
+        command = [
+            "docker",
+            "run",
+            "--name",
+            container,
+            "--rm",
+        ]
+        if with_limits:
+            command.extend(["--cpus", str(self.spec.cpu), "--memory", self.spec.memory])
+        command.extend(
+            [
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "--network",
+                "bridge" if self.spec.network else "none",
+                "--workdir",
+                workdir,
+                "--mount",
+                f"type=bind,source={self.workspace},target={self.spec.working_dir}",
+            ]
+        )
+        for key, value in env.items():
+            command.extend(["--env", f"{key}={value}"])
+        command.append(self.image.tag)
+        if shell_command is not None:
+            command.extend(["bash", "-lc", shell_command])
+        else:
+            assert argv is not None
+            command.extend(argv)
+        return command
 
     def cleanup(self, *, remove_image: bool = False) -> None:
         """Remove any leftover containers and optionally the per-run image."""

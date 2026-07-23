@@ -37,6 +37,9 @@ def transition_job(job: Job, status: JobStatus, *, error: str = "") -> Job:
     job.updated_at = utc_now()
     if error:
         job.last_error = error
+    elif status in {JobStatus.RUNNING, JobStatus.PUBLISHING, JobStatus.COMPLETED}:
+        # Clear stale pause/retry messages so completed/resumed jobs look healthy.
+        job.last_error = ""
     if status not in {JobStatus.RUNNING, JobStatus.PUBLISHING}:
         job.lease_owner = None
         job.lease_expires_at = None

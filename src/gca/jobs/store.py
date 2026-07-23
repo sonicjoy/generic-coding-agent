@@ -10,6 +10,8 @@ from typing import Protocol
 
 from gca.jobs.models import Job, JobStatus, RunSpec, utc_now
 from gca.routing import WORKFLOWS
+from gca.sqlite_util import connect as sqlite_connect
+from gca.sqlite_util import retry_locked
 
 
 class JobStoreError(RuntimeError):
@@ -361,6 +363,7 @@ class SqliteJobStore:
         job = Job.from_dict(json.loads(str(row["data"])))
         job.status = JobStatus.RUNNING
         job.attempt += 1
+        job.last_error = ""
         job.lease_owner = worker_id
         job.lease_expires_at = now + lease_seconds
         job.updated_at = utc_now()
@@ -394,47 +397,49 @@ class SqliteJobStore:
         return job
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                PRAGMA journal_mode = WAL;
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    idempotency_key TEXT UNIQUE,
-                    repository_url TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    data TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    not_before REAL NOT NULL,
-                    lease_owner TEXT,
-                    lease_expires_at REAL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS jobs_status_due
-                    ON jobs(status, not_before, created_at);
-                CREATE INDEX IF NOT EXISTS jobs_lease
-                    ON jobs(status, lease_expires_at);
-                """
-            )
-            columns = {
-                str(row["name"]) for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
-            }
-            if "repository_url" not in columns:
-                connection.execute(
-                    "ALTER TABLE jobs ADD COLUMN repository_url TEXT NOT NULL DEFAULT ''"
+        def _run() -> None:
+            with self._connect() as connection:
+                connection.executescript(
+                    """
+                    PRAGMA journal_mode = WAL;
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        id TEXT PRIMARY KEY,
+                        idempotency_key TEXT UNIQUE,
+                        repository_url TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        data TEXT NOT NULL,
+                        version INTEGER NOT NULL,
+                        not_before REAL NOT NULL,
+                        lease_owner TEXT,
+                        lease_expires_at REAL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS jobs_status_due
+                        ON jobs(status, not_before, created_at);
+                    CREATE INDEX IF NOT EXISTS jobs_lease
+                        ON jobs(status, lease_expires_at);
+                    """
                 )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS jobs_repository_status
-                    ON jobs(repository_url, status)
-                """
-            )
+                columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+                }
+                if "repository_url" not in columns:
+                    connection.execute(
+                        "ALTER TABLE jobs ADD COLUMN repository_url TEXT NOT NULL DEFAULT ''"
+                    )
+                connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS jobs_repository_status
+                        ON jobs(repository_url, status)
+                    """
+                )
+
+        retry_locked(_run)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        return connection
+        return sqlite_connect(self.path, timeout=30)
 
 
 def _validate_run_spec(spec: RunSpec) -> None:

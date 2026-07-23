@@ -19,6 +19,37 @@ class RequestBodyTooLarge(ValueError):
     """Raised when an HTTP body exceeds the configured service limit."""
 
 
+_PUBLICATION_TOKEN_ENV = {"github": "GCA_GITHUB_TOKEN", "gitlab": "GCA_GITLAB_TOKEN"}
+
+
+def enforce_publication_policy(spec: RunSpec, settings: ServiceSettings) -> RunSpec:
+    """Reject or strip publication requests the service cannot fulfill.
+
+    Webhooks always attach a publication target. Without a matching SCM token the
+    worker would otherwise run the agent and fail only at publish time. Call this
+    at enqueue so operators get a clear 400 naming the missing env var, or set
+    ``GCA_PUBLISH_MODE=off`` for intentional dry runs.
+    """
+
+    if spec.publication is None:
+        return spec
+    if settings.publish_mode == "off":
+        return replace(spec, publication=None)
+    provider = spec.publication.provider
+    token = {
+        "github": settings.github_token,
+        "gitlab": settings.gitlab_token,
+    }.get(provider, "")
+    if not token:
+        env_var = _PUBLICATION_TOKEN_ENV.get(provider)
+        hint = f"set {env_var}" if env_var else "configure an SCM token"
+        raise ValueError(
+            f"publication to '{provider}' requested but no SCM token is configured; "
+            f"{hint} or set GCA_PUBLISH_MODE=off to run without publishing"
+        )
+    return spec
+
+
 def service_state(request: Request) -> ServiceState:
     """Return application service state."""
 

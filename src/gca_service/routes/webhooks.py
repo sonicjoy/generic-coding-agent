@@ -19,6 +19,7 @@ from gca_service.config import ServiceSettings
 from gca_service.routes.common import (
     RequestBodyTooLarge,
     apply_default_max_steps,
+    enforce_publication_policy,
     job_payload,
     read_body,
     service_state,
@@ -70,6 +71,7 @@ async def receive_webhook(request: Request) -> Response:
         if spec is None:
             return Response(status_code=204)
         spec = apply_default_max_steps(spec, state.settings)
+        spec = enforce_publication_policy(spec, state.settings)
         validate_repository_spec(
             spec.repository,
             allowed_hosts=state.settings.allowed_repository_hosts,
