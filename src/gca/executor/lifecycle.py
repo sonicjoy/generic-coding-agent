@@ -139,17 +139,23 @@ class RunLifecycle:
                 self.executor.spec.remove_image_after_run and not self.executor.image.is_default
             )
         self.executor.cleanup(remove_image=remove)
-        if wipe_workspace:
-            root = self.workspace.parent if self.workspace.name == "repo" else self.workspace
-            if root.exists():
-                shutil.rmtree(root, ignore_errors=True)
+        if wipe_workspace and self.workspace.exists():
+            # Wipe the run workspace root (cloned ``repo/`` for hosted layouts).
+            # Sibling ``sessions/`` and ``meta/`` under the job directory are kept
+            # so diffs, summaries, and session evidence survive after completion.
+            shutil.rmtree(self.workspace, ignore_errors=True)
         self._cleaned = True
 
 
 def should_wipe_workspace(status: str) -> bool:
-    """Return whether a run status allows deleting the ephemeral workspace."""
+    """Return whether a run status allows deleting the ephemeral repository tree.
 
-    return status in {"completed", "failed", "cancelled"}
+    Completed jobs wipe the cloned repo after artifacts are persisted. Failed and
+    cancelled jobs keep the full workspace (including ``repo/``) for diagnosis —
+    matching local CLI retention and publish-failure debugging needs.
+    """
+
+    return status == "completed"
 
 
 def _copy_workspace(source: Path, destination: Path) -> None:

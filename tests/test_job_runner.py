@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from gca.executor.fake import FakeExecutor
+from gca.integrations.scm import PublicationError
 from gca.jobs.models import Job, JobStatus, PublicationTarget, RepositorySpec, RunSpec
 from gca.jobs.queue import SqliteJobQueue
 from gca.jobs.runner import JobRunner
@@ -119,8 +120,11 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
     assert result.status == JobStatus.COMPLETED, result.last_error
     assert result.session_id is not None
     assert result.workspace_path is not None
-    # Terminal jobs wipe the ephemeral workspace after cleanup.
+    # Completed jobs wipe the cloned repo but keep meta/session artifacts.
     assert not Path(result.workspace_path).exists()
+    artifacts = Path(result.workspace_path).parent / "meta" / "artifacts" / "result.json"
+    assert artifacts.is_file()
+    assert '"status": "completed"' in artifacts.read_text(encoding="utf-8")
     assert store.load(result.id).status == JobStatus.COMPLETED
 
 
@@ -514,3 +518,77 @@ def test_job_runner_mid_implementation_pause_does_not_publish(tmp_path: Path) ->
     assert publisher.calls == []
     assert result.publication == {}
     assert f"POST /runs/{result.id}/resume" in result.last_error
+
+
+class _FailingPublisher:
+    def publish(
+        self,
+        job: Job,
+        workspace: Path,
+        repo_config: RepoConfig,
+        *,
+        executor: object = None,
+    ) -> dict[str, object]:
+        _ = job, workspace, repo_config, executor
+        raise PublicationError("push rejected", retryable=False)
+
+
+def test_job_runner_retains_workspace_after_publish_failure(tmp_path: Path) -> None:
+    source = _source_repository(tmp_path)
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(
+        RunSpec(
+            task="Fix a typo",
+            repository=RepositorySpec(url=str(source), ref="main"),
+            workflow="fast",
+            max_steps=5,
+            publication=PublicationTarget(provider="fake", base_ref="main"),
+        )
+    )
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker")
+    assert claimed is not None
+    provider = ScriptedProvider.from_script(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "name": "create_file",
+                        "arguments": {"path": "generated.txt", "content": "done\n"},
+                    }
+                ]
+            },
+            {
+                "tool_calls": [
+                    {
+                        "name": "finish",
+                        "arguments": {"summary": "Generated the requested file."},
+                    }
+                ]
+            },
+        ]
+    )
+
+    def load_models(config: object) -> LoadedPlugins:
+        loaded = LoadedPlugins()
+        loaded.models.register(ModelProfile("scripted", provider, speed=5, cost=1))
+        return loaded
+
+    result = JobRunner(
+        store=store,
+        workspace_root=tmp_path / "workspaces",
+        model_loader=load_models,
+        publisher=_FailingPublisher(),
+        allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
+    ).execute(claimed)
+
+    assert result.status == JobStatus.FAILED, result.last_error
+    assert result.workspace_path is not None
+    repo = Path(result.workspace_path)
+    assert repo.is_dir()
+    assert (repo / "generated.txt").is_file()
+    artifacts = repo.parent / "meta" / "artifacts" / "result.json"
+    assert artifacts.is_file()
+    assert '"status": "failed"' in artifacts.read_text(encoding="utf-8")

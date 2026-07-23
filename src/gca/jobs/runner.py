@@ -15,6 +15,7 @@ from gca.executor.protocol import CommandExecutor
 from gca.git_credentials import GitCredentials
 from gca.integrations.http import IntegrationHttpError
 from gca.integrations.scm import PublicationError
+from gca.jobs.artifacts import persist_job_artifacts
 from gca.jobs.lifecycle import can_retry, retry_delay_seconds, transition_job
 from gca.jobs.models import Job, JobStatus, RepositorySpec
 from gca.jobs.store import JobStore
@@ -131,6 +132,11 @@ class JobRunner:
         except Exception as exc:
             self._handle_failure(job, exc)
         finally:
+            if layout.repository.exists():
+                try:
+                    persist_job_artifacts(layout, job, layout.repository)
+                except OSError:
+                    pass
             if lifecycle is not None:
                 lifecycle.cleanup(wipe_workspace=should_wipe_workspace(job.status.value))
         return job
