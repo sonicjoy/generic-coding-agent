@@ -117,6 +117,92 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
     assert client.post("/webhooks/github", content=body, headers=forged_headers).status_code == 401
 
 
+def test_github_webhook_applies_service_default_max_steps(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-budget",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        allowed_github_projects=frozenset({"owner/repo"}),
+        github_webhook_secret="webhook-secret-123456",
+        default_max_steps=100,
+    )
+    client = TestClient(create_app(settings))
+    body = json.dumps(
+        {
+            "action": "labeled",
+            "label": {"name": "gca-run"},
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "issue": {"number": 5, "title": "Fix issue", "body": "Details"},
+        }
+    ).encode()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret-123456",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    response = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "delivery-budget",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["max_steps"] == 100
+    job = ServiceState.build(settings).store.load(response.json()["id"])
+    assert job.run_spec.max_steps == 100
+
+
+def test_create_run_applies_service_default_max_steps(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-run-budget",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        default_max_steps=80,
+    )
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/runs",
+        json=_run_payload(),
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["max_steps"] == 80
+
+
+def test_create_run_explicit_max_steps_overrides_service_default(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-run-override",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        default_max_steps=80,
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["max_steps"] = 12
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["max_steps"] == 12
+
+
 def test_health_and_readiness(tmp_path: Path) -> None:
     client = TestClient(create_app(_settings(tmp_path)))
     assert client.get("/health").json() == {"status": "ok"}

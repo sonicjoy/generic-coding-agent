@@ -55,6 +55,7 @@ class ServiceSettings:
     log_retention_seconds: int = 2_592_000
     bot_user_id: int | None = None
     membership_access_levels: dict[tuple[int, int], int] = field(default_factory=dict)
+    default_max_steps: int | None = None
 
     @property
     def database_path(self) -> Path:
@@ -71,7 +72,7 @@ class ServiceSettings:
     ) -> ServiceSettings:
         """Build fail-closed settings from environment variables."""
 
-        values = dict(environ or os.environ)
+        values = dict(os.environ if environ is None else environ)
         api_token = values.get("GCA_API_TOKEN", "")
         if not api_token:
             raise ServiceConfigError("GCA_API_TOKEN is required")
@@ -127,6 +128,7 @@ class ServiceSettings:
             membership_access_levels=_membership_levels(
                 values.get("GCA_GITLAB_MEMBERSHIP_LEVELS", "")
             ),
+            default_max_steps=_optional_max_steps(values.get("GCA_DEFAULT_MAX_STEPS")),
         )
         settings.validate()
         return settings
@@ -158,6 +160,8 @@ class ServiceSettings:
             raise ServiceConfigError("lease_seconds must be positive")
         if self.max_request_bytes <= 0:
             raise ServiceConfigError("max_request_bytes must be positive")
+        if self.default_max_steps is not None and not 1 <= self.default_max_steps <= 1000:
+            raise ServiceConfigError("default_max_steps must be an integer from 1 to 1000")
         if not self.github_host or not self.gitlab_host:
             raise ServiceConfigError("SCM host names must not be empty")
         if not self.github_trigger_label.strip() or not self.gitlab_trigger_label.strip():
@@ -239,6 +243,18 @@ def _optional_int(value: str | None) -> int | None:
         return int(value)
     except ValueError as exc:
         raise ServiceConfigError("bot user id must be an integer") from exc
+
+
+def _optional_max_steps(value: str | None) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ServiceConfigError("GCA_DEFAULT_MAX_STEPS must be an integer") from exc
+    if not 1 <= parsed <= 1000:
+        raise ServiceConfigError("GCA_DEFAULT_MAX_STEPS must be an integer from 1 to 1000")
+    return parsed
 
 
 def _registrations(raw: str) -> dict[str, WebhookRegistration]:

@@ -507,6 +507,12 @@ when a maintainer applies the `gca-run` label; customize it with
 `GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL` (or per-registration
 `trigger_label`).
 
+Webhook and `POST /runs` submissions may omit `max_steps`. Set
+`GCA_DEFAULT_MAX_STEPS` (1..1000) on the service to apply a default budget to
+those jobs. Explicit `max_steps` on `/runs` (or resume) still wins. When neither
+is set, the worker uses the target repo's `.gca/config.yaml`
+`runtime.max_steps` (default 25).
+
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
 `GCA_GITLAB_TOKEN`. These tokens also provide temporary askpass credentials for
 private HTTPS clones on `GCA_GITHUB_HOST` / `GCA_GITLAB_HOST`; they are never
