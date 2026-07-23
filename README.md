@@ -403,9 +403,9 @@ Override automatic selection with `--workflow fast|feature|auto`, or configure
 gca:
   workflow: auto
   models:
-    fast: grok-4.5
+    fast: deepseek-v3.2
     planning: claude-opus-4.8
-    implementation: grok-4.5
+    implementation: deepseek-v3.2
     review: claude-opus-4.8
   minimum_strength:
     implementation: 2
