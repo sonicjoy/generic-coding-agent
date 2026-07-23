@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 from gca.integrations.git_auth import push_with_token
-from gca.integrations.http import request_json
+from gca.integrations.http import IntegrationHttpError, request_json
 from gca.integrations.repository import repository_path
 from gca.integrations.scm import ChangeRequest, PublicationError
 from gca.integrations.webhooks import (
@@ -66,10 +66,6 @@ class GitHubScmAdapter:
         if len(parts) != 2:
             raise PublicationError(f"invalid GitHub repository path: {slug}")
         owner = parts[0]
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
         query = urlencode(
             {
                 "state": "open",
@@ -80,14 +76,14 @@ class GitHubScmAdapter:
         existing = request_json(
             "GET",
             f"{self.api_url}/repos/{slug}/pulls?{query}",
-            headers=headers,
+            headers=self._headers(),
         )
         if isinstance(existing, list) and existing:
             return str(existing[0]["html_url"])
         created = request_json(
             "POST",
             f"{self.api_url}/repos/{slug}/pulls",
-            headers=headers,
+            headers=self._headers(),
             body={
                 "title": request.title,
                 "head": request.source_branch,
@@ -99,6 +95,51 @@ class GitHubScmAdapter:
         if not isinstance(created, dict) or not created.get("html_url"):
             raise PublicationError("GitHub pull-request response did not include html_url")
         return str(created["html_url"])
+
+    def authenticated_login(self) -> str:
+        """Return the login for the configured token (``GET /user``)."""
+
+        payload = request_json("GET", f"{self.api_url}/user", headers=self._headers())
+        if not isinstance(payload, dict) or not payload.get("login"):
+            raise IntegrationHttpError("GitHub /user response did not include login")
+        return str(payload["login"])
+
+    def assign_issue(self, repository_url: str, issue_number: str, assignees: list[str]) -> None:
+        """Add assignees to an issue (requires ``issues: write``)."""
+
+        slug = repository_path(repository_url)
+        cleaned = [name.strip() for name in assignees if name.strip()]
+        if not cleaned:
+            raise ValueError("at least one GitHub assignee is required")
+        request_json(
+            "POST",
+            f"{self.api_url}/repos/{slug}/issues/{issue_number}/assignees",
+            headers=self._headers(),
+            body={"assignees": cleaned},
+        )
+
+    def create_issue_comment(self, repository_url: str, issue_number: str, body: str) -> str:
+        """Post an issue comment and return its URL when present."""
+
+        text = body.strip()
+        if not text:
+            raise ValueError("issue comment body must not be empty")
+        slug = repository_path(repository_url)
+        created = request_json(
+            "POST",
+            f"{self.api_url}/repos/{slug}/issues/{issue_number}/comments",
+            headers=self._headers(),
+            body={"body": text},
+        )
+        if isinstance(created, dict) and created.get("html_url"):
+            return str(created["html_url"])
+        return ""
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
 
 class GitHubWebhookNormalizer:
