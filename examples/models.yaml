@@ -14,6 +14,13 @@ providers:
       X-Title: generic-coding-agent
 
 models:
+  deepseek-v3.2:
+    provider: openrouter
+    model_id: deepseek/deepseek-v3.2
+    strength: 3
+    speed: 5
+    cost: 1
+
   grok-4.5:
     provider: openrouter
     model_id: x-ai/grok-4.5
