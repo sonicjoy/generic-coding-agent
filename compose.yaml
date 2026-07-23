@@ -4,6 +4,9 @@
 #
 #   cp examples/service.env.example .env   # edit tokens
 #   docker compose up --build
+#
+# Start order matters for SQLite schema init: wait for API /ready before the
+# worker claims jobs. Compose enforces that via the API healthcheck.
 
 services:
   api:
@@ -19,11 +22,18 @@ services:
       - "8080:8080"
     volumes:
       - gca-data:/var/lib/gca
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
 
   worker:
     image: gca:local
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     command: ["gca-service", "worker"]
     env_file:
       - path: .env

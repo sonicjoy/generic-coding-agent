@@ -23,6 +23,8 @@ from gca.issue_sessions.models import (
     Turn,
 )
 from gca.jobs.models import Job, JobStatus, RepositorySpec, RunSpec, utc_now
+from gca.sqlite_util import connect as sqlite_connect
+from gca.sqlite_util import retry_locked
 
 
 class IssueSessionStoreError(RuntimeError):
@@ -254,9 +256,10 @@ class IssueSessionStore:
             return int(cursor.rowcount)
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
+        def _run() -> None:
+            with self._connect() as connection:
+                connection.executescript(
+                    """
                 PRAGMA journal_mode = WAL;
                 PRAGMA foreign_keys = ON;
                 CREATE TABLE IF NOT EXISTS issue_sessions (
@@ -371,8 +374,10 @@ class IssueSessionStore:
                 CREATE INDEX IF NOT EXISTS session_events_created
                     ON session_events(created_at);
                 """
-            )
-            self._ensure_job_columns(connection)
+                )
+                self._ensure_job_columns(connection)
+
+        retry_locked(_run)
 
     def _ensure_job_columns(self, connection: sqlite3.Connection) -> None:
         connection.execute(
@@ -407,7 +412,12 @@ class IssueSessionStore:
         }
         for name, statement in alterations.items():
             if name not in columns:
-                connection.execute(statement)
+                try:
+                    connection.execute(statement)
+                except sqlite3.OperationalError as exc:
+                    # Concurrent API/worker init can race on ALTER TABLE ADD COLUMN.
+                    if "duplicate column" not in str(exc).lower():
+                        raise
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS jobs_issue_session
@@ -422,8 +432,7 @@ class IssueSessionStore:
         )
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        connection.row_factory = sqlite3.Row
+        connection = sqlite_connect(self.path, timeout=30)
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 

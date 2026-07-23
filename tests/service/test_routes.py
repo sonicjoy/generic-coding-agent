@@ -21,6 +21,7 @@ def _settings(tmp_path: Path) -> ServiceSettings:
         allowed_repository_hosts=frozenset({"example.test", "github.com"}),
         allowed_github_projects=frozenset({"owner/repo"}),
         github_webhook_secret="webhook-secret-123456",
+        github_token="github-token-for-tests",
     )
 
 
@@ -118,13 +119,13 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
 
 
 def test_github_webhook_applies_service_default_max_steps(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
     settings = ServiceSettings(
         data_dir=tmp_path / "service-budget",
         api_token="api-token-123456",
         allowed_repository_hosts=frozenset({"example.test", "github.com"}),
         allowed_github_projects=frozenset({"owner/repo"}),
         github_webhook_secret="webhook-secret-123456",
+        github_token="github-token-for-tests",
         default_max_steps=100,
     )
     client = TestClient(create_app(settings))
@@ -255,3 +256,90 @@ def test_paused_run_can_resume_with_larger_budget(tmp_path: Path) -> None:
     resumed = state.store.load(job.id)
     assert resumed.status == JobStatus.QUEUED
     assert resumed.run_spec.max_steps == 10
+
+
+def test_create_run_rejects_publication_without_scm_token(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-no-token",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["publication"] = {"provider": "github", "base_ref": "main"}
+
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 400
+    assert "GCA_GITHUB_TOKEN" in response.json()["error"]
+
+
+def test_create_run_strips_publication_when_publish_mode_off(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-publish-off",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        publish_mode="off",
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["publication"] = {"provider": "github", "base_ref": "main"}
+
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 202
+    job = ServiceState.build(settings).store.load(response.json()["id"])
+    assert job.run_spec.publication is None
+
+
+def test_github_webhook_rejects_publication_without_scm_token(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-webhook-no-token",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        allowed_github_projects=frozenset({"owner/repo"}),
+        github_webhook_secret="webhook-secret-123456",
+    )
+    client = TestClient(create_app(settings))
+    body = json.dumps(
+        {
+            "action": "labeled",
+            "label": {"name": "gca-run"},
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "issue": {"number": 5, "title": "Fix issue", "body": "Details"},
+        }
+    ).encode()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret-123456",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+
+    response = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "delivery-no-token",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "GCA_GITHUB_TOKEN" in response.json()["error"]

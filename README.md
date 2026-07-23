@@ -514,11 +514,15 @@ is set, the worker uses the target repo's `.gca/config.yaml`
 `runtime.max_steps` (default 25).
 
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
-`GCA_GITLAB_TOKEN`. These tokens also provide temporary askpass credentials for
-private HTTPS clones on `GCA_GITHUB_HOST` / `GCA_GITLAB_HOST`; they are never
-passed to the agent subprocess. The worker—not the LLM—runs required fixed
-checks, enforces the repository's `publication` limits, commits, pushes a
-deterministic branch, and opens an idempotent PR/MR:
+`GCA_GITLAB_TOKEN`. Webhook and `POST /runs` requests that include a
+publication target are rejected at enqueue time when the matching token is
+missing (the error names `GCA_GITHUB_TOKEN` / `GCA_GITLAB_TOKEN`). Set
+`GCA_PUBLISH_MODE=off` to strip publication and run without opening a PR/MR.
+These tokens also provide temporary askpass credentials for private HTTPS
+clones on `GCA_GITHUB_HOST` / `GCA_GITLAB_HOST`; they are never passed to the
+agent subprocess. The worker—not the LLM—runs required fixed checks, enforces
+the repository's `publication` limits, commits, pushes a deterministic branch,
+and opens an idempotent PR/MR:
 
 ```yaml
 publication:
@@ -577,12 +581,16 @@ docker build -t gca:latest .
 ```
 
 Local / cloud-like bring-up with Compose (API + worker, shared data volume,
-Docker socket for nested isolation runs):
+Docker socket for nested isolation runs). Compose waits for API `/ready`
+before starting the worker so SQLite schema init is not raced:
 
 ```bash
 cp examples/service.env.example .env   # set GCA_* tokens
 docker compose up --build
 ```
+
+Without Compose, start the API first, wait for `GET /ready`, then start the
+worker. Store initialization also retries on `database is locked`.
 
 On a VM or container host, run the worker with:
 
@@ -590,6 +598,8 @@ On a VM or container host, run the worker with:
 - `/var/run/docker.sock` mounted read/write so the worker can `docker build` /
   `docker run` per-session isolation containers
 - Org-scoped `GCA_GITHUB_TOKEN` or `GCA_GITLAB_TOKEN` (one token per tenant deploy)
+- Optional `GCA_DOCKER_DISABLE_RESOURCE_LIMITS=1` on nested cgroupv2 hosts that
+  reject `--cpus`/`--memory` (the executor also retries once without limits)
 
 Target repos may optionally add `Dockerfile.agent` (or `environment.dockerfile`
 in `.gca/config.yaml` / `agent/config.yaml`) for dependency parity. Without it,
