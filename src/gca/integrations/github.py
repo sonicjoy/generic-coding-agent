@@ -20,6 +20,7 @@ from gca.integrations.webhooks import (
     issue_task,
     pull_request_review_task,
 )
+from gca.jobs.merge_cleanup import MergedChangeRequest
 from gca.jobs.models import PublicationTarget, RepositorySpec, RunSpec
 from gca.workspace.prepare import repository_host
 
@@ -107,6 +108,9 @@ class GitHubWebhookNormalizer:
     - ``issues`` + ``labeled`` with the configured trigger label (default ``gca-run``)
     - ``pull_request_review`` submitted as ``changes_requested``, or with ``/agent fix``
     - ``pull_request_review_comment`` created with ``/agent fix`` in the comment body
+
+    Lifecycle (not an enqueue):
+    - ``pull_request`` closed with ``merged=true`` → :meth:`parse_merged_pull_request`
     """
 
     provider = "github"
@@ -137,12 +141,7 @@ class GitHubWebhookNormalizer:
         allowed_projects: frozenset[str] = frozenset(),
     ) -> RunSpec | None:
         event = context.header("X-GitHub-Event")
-        try:
-            payload = json.loads(context.body)
-        except json.JSONDecodeError as exc:
-            raise WebhookPayloadError(f"invalid GitHub JSON: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise WebhookPayloadError("GitHub payload must be an object")
+        payload = self._payload(context)
         if event == "issues":
             return self._normalize_issue_label(payload, allowed_projects=allowed_projects)
         if event == "pull_request_review":
@@ -152,6 +151,54 @@ class GitHubWebhookNormalizer:
                 payload, allowed_projects=allowed_projects
             )
         return None
+
+    def parse_merged_pull_request(
+        self,
+        context: WebhookContext,
+        *,
+        allowed_projects: frozenset[str] = frozenset(),
+    ) -> MergedChangeRequest | None:
+        """Return merge identity for ``pull_request`` closed+merged deliveries."""
+
+        if context.header("X-GitHub-Event") != "pull_request":
+            return None
+        payload = self._payload(context)
+        if payload.get("action") != "closed":
+            return None
+        pull_request = payload.get("pull_request")
+        if not isinstance(pull_request, dict):
+            raise WebhookPayloadError("GitHub pull_request payload is missing pull_request")
+        if pull_request.get("merged") is not True:
+            return None
+        repository = payload.get("repository")
+        if not isinstance(repository, dict):
+            raise WebhookPayloadError("GitHub pull_request payload is missing repository")
+        project, _clone_url, _default = self._repository_fields(
+            repository, allowed_projects=allowed_projects
+        )
+        number = str(pull_request.get("number") or "").strip()
+        if not number:
+            raise WebhookPayloadError("GitHub merged pull_request is missing number")
+        head = pull_request.get("head")
+        head_ref = ""
+        if isinstance(head, dict):
+            head_ref = str(head.get("ref") or "").strip()
+        return MergedChangeRequest(
+            provider="github",
+            project=project,
+            number=number,
+            url=str(pull_request.get("html_url") or "").strip(),
+            head_ref=head_ref,
+        )
+
+    def _payload(self, context: WebhookContext) -> dict[str, Any]:
+        try:
+            payload = json.loads(context.body)
+        except json.JSONDecodeError as exc:
+            raise WebhookPayloadError(f"invalid GitHub JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise WebhookPayloadError("GitHub payload must be an object")
+        return payload
 
     def _normalize_issue_label(
         self,
