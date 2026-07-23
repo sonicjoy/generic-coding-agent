@@ -188,6 +188,8 @@ class RecordingGitLabApiClient:
             "description": description,
             "web_url": f"https://gitlab.example/{project_id}/-/merge_requests/{self._mr_counter}",
             "sha": "a" * 40,
+            "detailed_merge_status": "mergeable",
+            "merge_status": "can_be_merged",
         }
         self._mr_counter += 1
         self.merge_requests.append(mr)
@@ -250,6 +252,20 @@ class OutboxProcessor:
 
     def process_one(self, action: OutboundAction) -> None:
         with self.store.unit_of_work() as uow:
+            generation = uow.get_generation(action.generation_id)
+            if generation.cancel_requested or generation.status == GenerationStatus.CANCELLED:
+                action.status = OutboundActionStatus.FAILED
+                action.last_error = "cancelled"
+                uow.save_outbound_action(action)
+                return
+            if action.kind == "merge_mr":
+                # Fail closed if lease epoch advanced after the merge intent was queued.
+                expected_epoch = action.payload.get("lease_epoch")
+                if expected_epoch is not None and int(expected_epoch) != generation.lease_epoch:
+                    action.status = OutboundActionStatus.FAILED
+                    action.last_error = "stale lease epoch"
+                    uow.save_outbound_action(action)
+                    return
             action.status = OutboundActionStatus.LEASED
             action.attempts += 1
             uow.save_outbound_action(action)
@@ -384,20 +400,15 @@ class OutboxProcessor:
                     },
                 )
             )
-            # Two-key auto-merge: operator project allowlist AND trusted repo policy.
+            # Two-key auto-merge is recorded here but merge is deferred until a
+            # successful current-head pipeline reconciliation (deny-wins gating).
             if session.project_id in self.allow_auto_merge_projects and repo_auto_merge:
-                uow.insert_outbound_action(
-                    OutboundAction(
-                        issue_session_id=session.id,
-                        generation_id=generation.id,
-                        kind="merge_mr",
-                        effect_key=f"merge:{session.id}:{generation.id}:{link.expected_head_sha}",
-                        payload={
-                            "project_id": session.project_id,
-                            "mr_iid": link.mr_iid,
-                            "sha": link.expected_head_sha,
-                        },
-                    )
+                uow.append_event(
+                    issue_session_id=session.id,
+                    generation_id=generation.id,
+                    turn_id=action.turn_id,
+                    kind="auto_merge",
+                    payload={"eligible": True, "deferred_until": "pipeline_success"},
                 )
         return {
             "branch": branch,
@@ -408,6 +419,14 @@ class OutboxProcessor:
 
     def _merge_mr(self, action: OutboundAction) -> dict[str, Any]:
         payload = action.payload
+        generation = self.store.get_generation(action.generation_id)
+        if generation.cancel_requested:
+            raise RuntimeError("merge cancelled")
+        if generation.metadata.get("auto_merge") is not True:
+            raise RuntimeError("auto-merge no longer permitted by repo policy metadata")
+        session = self.store.get_session(action.issue_session_id)
+        if session.project_id not in self.allow_auto_merge_projects:
+            raise RuntimeError("auto-merge no longer permitted by operator policy")
         return self.api.merge_merge_request(
             project_id=int(payload["project_id"]),
             mr_iid=int(payload["mr_iid"]),

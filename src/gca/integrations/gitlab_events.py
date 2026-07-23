@@ -49,6 +49,7 @@ class NormalizedGitLabEvent:
     pipeline_id: int | None = None
     pipeline_status: str = ""
     pipeline_sha: str = ""
+    failed_jobs: tuple[dict[str, object], ...] = ()
     mr_state: str = ""
     target_branch: str = ""
     source_branch: str = ""
@@ -412,6 +413,7 @@ class GitLabIssueEventNormalizer:
             "canceled",
             "manual",
         }
+        failed_jobs = _extract_failed_jobs(payload, project_id=project_id)
         return NormalizedGitLabEvent(
             delivery_id=delivery_id,
             event_uuid=event_uuid,
@@ -428,6 +430,7 @@ class GitLabIssueEventNormalizer:
             pipeline_id=pipeline_id,
             pipeline_status=status,
             pipeline_sha=str(attributes.get("sha", "")),
+            failed_jobs=failed_jobs,
             relevant=relevant,
             ignore_reason="" if relevant else "pipeline is unrelated or non-actionable",
             payload=_safe_payload(payload),
@@ -471,6 +474,37 @@ def _safe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if len(encoded) > 20_000:
         return {"truncated": True, "object_kind": payload.get("object_kind")}
     return result
+
+
+def _extract_failed_jobs(
+    payload: dict[str, Any],
+    *,
+    project_id: int,
+) -> tuple[dict[str, object], ...]:
+    """Extract failed CI jobs from a Pipeline Hook payload."""
+
+    builds = payload.get("builds")
+    if not isinstance(builds, list):
+        return ()
+    jobs: list[dict[str, object]] = []
+    for item in builds:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status", "")).lower() != "failed":
+            continue
+        job_id = item.get("id")
+        if not isinstance(job_id, int):
+            continue
+        jobs.append(
+            {
+                "id": job_id,
+                "project_id": project_id,
+                "name": str(item.get("name", "")),
+                "stage": str(item.get("stage", "")),
+                "failure_reason": str(item.get("failure_reason", "")),
+            }
+        )
+    return tuple(jobs)
 
 
 def neutralize_untrusted_markdown(text: str) -> str:

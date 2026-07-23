@@ -206,11 +206,22 @@ class SqliteJobStore:
                 """
                 SELECT queued.data FROM jobs AS queued
                 WHERE queued.status = ? AND queued.not_before <= ?
+                  AND COALESCE(queued.cancel_requested, 0) = 0
                   AND NOT EXISTS (
                     SELECT 1 FROM jobs AS active
                     WHERE active.repository_url = queued.repository_url
                       AND active.id != queued.id
                       AND active.status IN (?, ?)
+                  )
+                  AND (
+                    queued.project_id IS NULL
+                    OR queued.project_id = 0
+                    OR NOT EXISTS (
+                      SELECT 1 FROM jobs AS active_project
+                      WHERE active_project.project_id = queued.project_id
+                        AND active_project.id != queued.id
+                        AND active_project.status IN (?, ?)
+                    )
                   )
                 ORDER BY queued.created_at ASC
                 LIMIT 1
@@ -218,6 +229,8 @@ class SqliteJobStore:
                 (
                     JobStatus.QUEUED.value,
                     now,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
                     JobStatus.RUNNING.value,
                     JobStatus.PUBLISHING.value,
                 ),
@@ -241,17 +254,30 @@ class SqliteJobStore:
                 """
                 SELECT queued.data FROM jobs AS queued
                 WHERE queued.id = ? AND queued.status = ? AND queued.not_before <= ?
+                  AND COALESCE(queued.cancel_requested, 0) = 0
                   AND NOT EXISTS (
                     SELECT 1 FROM jobs AS active
                     WHERE active.repository_url = queued.repository_url
                       AND active.id != queued.id
                       AND active.status IN (?, ?)
                   )
+                  AND (
+                    queued.project_id IS NULL
+                    OR queued.project_id = 0
+                    OR NOT EXISTS (
+                      SELECT 1 FROM jobs AS active_project
+                      WHERE active_project.project_id = queued.project_id
+                        AND active_project.id != queued.id
+                        AND active_project.status IN (?, ?)
+                    )
+                  )
                 """,
                 (
                     job_id,
                     JobStatus.QUEUED.value,
                     now,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
                     JobStatus.RUNNING.value,
                     JobStatus.PUBLISHING.value,
                 ),
@@ -424,10 +450,28 @@ class SqliteJobStore:
                 connection.execute(
                     "ALTER TABLE jobs ADD COLUMN repository_url TEXT NOT NULL DEFAULT ''"
                 )
+            for name, statement in {
+                "issue_session_id": "ALTER TABLE jobs ADD COLUMN issue_session_id TEXT",
+                "generation_id": "ALTER TABLE jobs ADD COLUMN generation_id TEXT",
+                "turn_id": "ALTER TABLE jobs ADD COLUMN turn_id TEXT",
+                "lease_epoch": "ALTER TABLE jobs ADD COLUMN lease_epoch INTEGER NOT NULL DEFAULT 0",
+                "cancel_requested": (
+                    "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+                ),
+                "project_id": "ALTER TABLE jobs ADD COLUMN project_id INTEGER",
+            }.items():
+                if name not in columns:
+                    connection.execute(statement)
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS jobs_repository_status
                     ON jobs(repository_url, status)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS jobs_project_status
+                    ON jobs(project_id, status)
                 """
             )
 

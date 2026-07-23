@@ -702,12 +702,19 @@ class IssueSessionUnitOfWork:
     ) -> Job:
         """Create a queued job row for one turn inside the same transaction."""
 
+        # Prefer the bot-owned branch for follow-ups; otherwise frozen base SHA or target.
+        checkout_ref = (
+            generation.branch_name
+            or generation.target_base_sha
+            or generation.target_branch
+            or "main"
+        )
         job = Job(
             run_spec=RunSpec(
                 task=task,
                 repository=RepositorySpec(
                     url=session.repository_url,
-                    ref=generation.target_branch or "main",
+                    ref=checkout_ref,
                 ),
                 workflow=workflow,
                 max_steps=max_steps or turn.max_steps,
@@ -717,6 +724,7 @@ class IssueSessionUnitOfWork:
                     "turn_id": turn.id,
                     "project_id": str(session.project_id),
                     "issue_iid": str(session.issue_iid),
+                    "lease_epoch": str(generation.lease_epoch),
                 },
             )
         )
@@ -758,6 +766,25 @@ class IssueSessionUnitOfWork:
         )
         turn.job_id = job.id
         return job
+
+    def mark_generation_jobs_cancelled(self, generation_id: str) -> int:
+        """Flag queued/running jobs for a generation as cancel-requested."""
+
+        cursor = self.connection.execute(
+            """
+            UPDATE jobs
+            SET cancel_requested = 1
+            WHERE generation_id = ?
+              AND status IN (?, ?, ?)
+            """,
+            (
+                generation_id,
+                JobStatus.QUEUED.value,
+                JobStatus.RUNNING.value,
+                JobStatus.PUBLISHING.value,
+            ),
+        )
+        return int(cursor.rowcount)
 
     def upsert_scm_link(self, link: ScmLink) -> ScmLink:
         existing = self.connection.execute(
