@@ -563,8 +563,10 @@ PR/MR; unfinished mid-implementation pauses never publish.
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
 `GCA_GITLAB_TOKEN`. Webhook and `POST /runs` requests that include a
 publication target are rejected at enqueue time when the matching token is
-missing (the error names `GCA_GITHUB_TOKEN` / `GCA_GITLAB_TOKEN`). Set
-`GCA_PUBLISH_MODE=off` to strip publication and run without opening a PR/MR.
+missing (the error names `GCA_GITHUB_TOKEN` / `GCA_GITLAB_TOKEN`).
+`GCA_PUBLISH_MODE` supports `off` (strip publication and do not push), `branch`
+(push the service branch without opening a PR/MR), and `pr` (push and open the
+PR/MR). `auto` remains a backward-compatible alias for `pr`.
 These tokens also provide temporary askpass credentials for private HTTPS
 clones on `GCA_GITHUB_HOST` / `GCA_GITLAB_HOST`; they are never passed to the
 agent subprocess. The worker—not the LLM—runs required fixed checks, enforces

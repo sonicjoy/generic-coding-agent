@@ -425,6 +425,30 @@ def test_create_run_strips_publication_when_publish_mode_off(tmp_path: Path) -> 
     assert job.run_spec.publication is None
 
 
+def test_create_run_keeps_publication_when_publish_mode_branch(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-publish-branch",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        github_token="github-token-for-tests",
+        publish_mode="branch",
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["publication"] = {"provider": "github", "base_ref": "main"}
+
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 202
+    job = ServiceState.build(settings).store.load(response.json()["id"])
+    assert job.run_spec.publication is not None
+    assert job.run_spec.publication.provider == "github"
+
+
 def test_github_webhook_rejects_publication_without_scm_token(tmp_path: Path) -> None:
     settings = ServiceSettings(
         data_dir=tmp_path / "service-webhook-no-token",

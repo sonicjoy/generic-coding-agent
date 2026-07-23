@@ -142,8 +142,8 @@ class ServiceSettings:
             raise ServiceConfigError("api_token is required")
         if len(self.api_token) < 16:
             raise ServiceConfigError("api_token must be at least 16 characters")
-        if self.publish_mode not in {"auto", "off"}:
-            raise ServiceConfigError("GCA_PUBLISH_MODE must be 'auto' or 'off'")
+        if self.publish_mode not in {"auto", "off", "branch", "pr"}:
+            raise ServiceConfigError("GCA_PUBLISH_MODE must be 'off', 'branch', 'pr', or 'auto'")
         if not self.allowed_repository_hosts and not self.allow_local_repositories:
             raise ServiceConfigError(
                 "configure allowed_repository_hosts or explicitly allow local repositories"

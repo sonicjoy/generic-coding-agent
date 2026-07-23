@@ -27,8 +27,9 @@ def enforce_publication_policy(spec: RunSpec, settings: ServiceSettings) -> RunS
 
     Webhooks always attach a publication target. Without a matching SCM token the
     worker would otherwise run the agent and fail only at publish time. Call this
-    at enqueue so operators get a clear 400 naming the missing env var, or set
-    ``GCA_PUBLISH_MODE=off`` for intentional dry runs.
+    at enqueue so operators get a clear 400 naming the missing env var. Use
+    ``GCA_PUBLISH_MODE=off`` for intentional dry runs, or ``branch`` to push
+    without opening a change request.
     """
 
     if spec.publication is None:

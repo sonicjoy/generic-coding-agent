@@ -147,6 +147,7 @@ class PublicationController:
         git_user_name: str = "Generic Coding Agent",
         git_user_email: str = "gca@localhost",
         tool_secret_grants: Mapping[str, Mapping[str, frozenset[str]]] | None = None,
+        open_change_requests: bool = True,
     ) -> None:
         self.adapters = dict(adapters)
         self.credentials = credentials or CredentialBroker.from_environment()
@@ -155,6 +156,7 @@ class PublicationController:
         self.tool_secret_grants = {
             project.lower(): dict(tools) for project, tools in (tool_secret_grants or {}).items()
         }
+        self.open_change_requests = open_change_requests
 
     def publish(
         self,
@@ -227,6 +229,12 @@ class PublicationController:
 
         sha = _git(workspace, ["rev-parse", "HEAD"], self.credentials).strip()
         adapter.push(workspace, branch, job.run_spec.repository.url)
+        if not self.open_change_requests:
+            return PublicationResult(
+                branch=branch,
+                commit_sha=sha,
+                change_request_url=None,
+            ).to_dict()
         title = _commit_message(policy.commit_prefix, job)
         request = ChangeRequest(
             repository_url=job.run_spec.repository.url,

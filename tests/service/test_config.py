@@ -54,6 +54,30 @@ def test_default_max_steps_is_optional_and_bounded() -> None:
         )
 
 
+@pytest.mark.parametrize("mode", ["off", "branch", "pr", "auto"])
+def test_publish_mode_accepts_supported_values(mode: str) -> None:
+    settings = ServiceSettings.from_environment(
+        {
+            "GCA_API_TOKEN": "api-token-123456",
+            "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+            "GCA_PUBLISH_MODE": mode,
+        }
+    )
+
+    assert settings.publish_mode == mode
+
+
+def test_publish_mode_rejects_unknown_value() -> None:
+    with pytest.raises(ServiceConfigError, match="GCA_PUBLISH_MODE"):
+        ServiceSettings.from_environment(
+            {
+                "GCA_API_TOKEN": "api-token-123456",
+                "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+                "GCA_PUBLISH_MODE": "push",
+            }
+        )
+
+
 def test_settings_require_auth_and_repository_allowlist() -> None:
     with pytest.raises(ServiceConfigError, match="GCA_API_TOKEN"):
         ServiceSettings.from_environment({})
