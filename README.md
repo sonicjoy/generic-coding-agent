@@ -401,9 +401,9 @@ gca:
   workflow: auto
   models:
     fast: grok-4.5
-    planning: [claude-fable-5, claude-opus-4.8]
+    planning: claude-opus-4.8
     implementation: grok-4.5
-    review: [claude-fable-5, claude-opus-4.8]
+    review: claude-opus-4.8
   minimum_strength:
     implementation: 2
   max_review_cycles: 2
