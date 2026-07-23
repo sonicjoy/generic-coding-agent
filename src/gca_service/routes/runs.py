@@ -82,8 +82,24 @@ async def get_run(request: Request) -> JSONResponse:
     try:
         job = state.store.load(request.path_params["job_id"])
     except JobNotFoundError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+        return _run_not_found(state.settings.data_dir, str(exc))
     return JSONResponse(job_payload(job))
+
+
+async def get_latest_run(request: Request) -> JSONResponse:
+    """Return the newest durable run in the configured data directory."""
+
+    unauthorized = require_auth(request)
+    if unauthorized is not None:
+        return unauthorized
+    state = service_state(request)
+    jobs = state.store.list(limit=1)
+    if not jobs:
+        return _run_not_found(
+            state.settings.data_dir,
+            "no runs found in configured data directory",
+        )
+    return JSONResponse(job_payload(jobs[0]))
 
 
 async def cancel_run(request: Request) -> JSONResponse:
@@ -103,7 +119,7 @@ async def cancel_run(request: Request) -> JSONResponse:
         transition_job(job, JobStatus.CANCELLED)
         state.store.save(job)
     except JobNotFoundError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+        return _run_not_found(state.settings.data_dir, str(exc))
     except JobTransitionError as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
     return JSONResponse(job_payload(job))
@@ -155,7 +171,21 @@ async def resume_run(request: Request) -> JSONResponse:
     except RequestBodyTooLarge as exc:
         return JSONResponse({"error": str(exc)}, status_code=413)
     except JobNotFoundError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+        return _run_not_found(state.settings.data_dir, str(exc))
     except (ValueError, JobTransitionError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse(job_payload(job), status_code=202)
+
+
+def _run_not_found(data_dir: object, error: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": error,
+            "hint": (
+                f"Run IDs are stored under GCA_DATA_DIR={data_dir}. Verify the API "
+                "and worker are using the same durable data directory, or call "
+                "GET /runs/latest to discover the newest run in this data dir."
+            ),
+        },
+        status_code=404,
+    )
