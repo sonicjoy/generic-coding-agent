@@ -19,7 +19,7 @@ prompt = sys.argv[1] if len(sys.argv) > 1 else ""
 expected_host = os.environ.get("GCA_GIT_HOST", "")
 hosts = {
     urlparse(url).hostname
-    for url in re.findall(r"https?://[^\\\\s'\\"]+", prompt)
+    for url in re.findall(r"https?://[^\\s'\\"]+", prompt)
 }
 if expected_host and expected_host.lower() not in {host.lower() for host in hosts if host}:
     raise SystemExit("credential prompt host mismatch")
