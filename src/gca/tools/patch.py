@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from gca.tools.base import Tool, ToolContext, ToolError, ToolResult
+from gca.tools.python_source import validate_python_source
 
 # How far to search around the declared hunk position before giving up.
 _SEARCH_WINDOW = 200
@@ -207,6 +208,9 @@ def apply_patch(diff: str, ctx: ToolContext) -> list[str]:
                 raise PatchError(f"target file not found: {rel_path}")
             original = target.read_text(encoding="utf-8")
         new_content = _apply_hunks(original, patch.hunks)
+        syntax_error = validate_python_source(rel_path, new_content)
+        if syntax_error is not None:
+            raise PatchError(syntax_error)
         planned.append(_PlannedChange(path=rel_path, action="write", content=new_content))
 
     # All hunks validated; now perform writes (atomic in aggregate).

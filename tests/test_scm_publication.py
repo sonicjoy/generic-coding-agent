@@ -165,6 +165,101 @@ publication:
     assert not (repository / "owned.txt").exists()
 
 
+def _repository_without_required_checks(tmp_path: Path) -> Path:
+    repository = tmp_path / "repo-default-checks"
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    _git(repository, "config", "user.email", "tests@example.test")
+    _git(repository, "config", "user.name", "Tests")
+    config_dir = repository / ".gca"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        """
+version: 1
+publication:
+  allowed_paths: ["src/**"]
+  max_files: 5
+  max_changed_lines: 20
+""",
+        encoding="utf-8",
+    )
+    (repository / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Initial")
+    return repository
+
+
+def test_publication_blocks_syntax_error_without_required_checks(tmp_path: Path) -> None:
+    repository = _repository_without_required_checks(tmp_path)
+    source = repository / "src"
+    source.mkdir()
+    # PR #29 / issue #33 corruption pattern.
+    (source / "broken.py").write_text('\\"""doc"""\nVALUE = 1\n', encoding="utf-8")
+    adapter = FakeAdapter()
+
+    with pytest.raises(PublicationError, match="default Python syntax check failed"):
+        PublicationController({"fake": adapter}).publish(
+            _job(repository),
+            repository,
+            load_repo_config(repository),
+            executor=_executor(),
+        )
+
+    assert adapter.pushed == []
+    assert adapter.requests == []
+
+
+def test_publication_allows_valid_python_without_required_checks(tmp_path: Path) -> None:
+    repository = _repository_without_required_checks(tmp_path)
+    source = repository / "src"
+    source.mkdir()
+    (source / "ok.py").write_text('"""ok"""\nVALUE = 1\n', encoding="utf-8")
+    adapter = FakeAdapter()
+
+    result = PublicationController({"fake": adapter}).publish(
+        _job(repository),
+        repository,
+        load_repo_config(repository),
+        executor=_executor(),
+    )
+
+    assert result["change_request_url"] == "https://scm.example/change/1"
+    assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
+
+
+def test_required_check_failure_blocks_publish(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    (repository / ".gca" / "config.yaml").write_text(
+        """
+version: 1
+tools:
+  fixed_commands:
+    verify:
+      argv: [python, -c, "raise SystemExit(1)"]
+publication:
+  required_checks: [verify]
+  allowed_paths: ["src/**"]
+""",
+        encoding="utf-8",
+    )
+    _git(repository, "add", ".gca/config.yaml")
+    _git(repository, "commit", "-m", "Failing check")
+    source = repository / "src"
+    source.mkdir()
+    (source / "change.py").write_text("VALUE = 1\n", encoding="utf-8")
+    adapter = FakeAdapter()
+
+    with pytest.raises(PublicationError, match="required check 'verify' failed"):
+        PublicationController({"fake": adapter}).publish(
+            _job(repository),
+            repository,
+            load_repo_config(repository),
+            executor=_executor(),
+        )
+
+    assert adapter.pushed == []
+
+
 def test_publication_secret_grants_are_project_and_tool_scoped(
     tmp_path: Path,
     monkeypatch: object,

@@ -58,3 +58,19 @@ def test_parse_multiple_files(tmp_path: Path) -> None:
     assert len(patches) == 2
     assert patches[0].new_path == "x.txt"
     assert patches[1].new_path == "y.txt"
+
+
+def test_apply_patch_rejects_invalid_python_before_write(tmp_path: Path) -> None:
+    (tmp_path / "mod.py").write_text('"""ok"""\nVALUE = 1\n', encoding="utf-8")
+    diff = '--- a/mod.py\n+++ b/mod.py\n@@ -1,2 +1,2 @@\n-"""ok"""\n+\\"""ok"""\n VALUE = 1\n'
+    with pytest.raises(PatchError, match="syntax error"):
+        apply_patch(diff, _ctx(tmp_path))
+    assert (tmp_path / "mod.py").read_text(encoding="utf-8") == '"""ok"""\nVALUE = 1\n'
+
+
+def test_apply_patch_allows_python_docstrings(tmp_path: Path) -> None:
+    (tmp_path / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    diff = '--- a/mod.py\n+++ b/mod.py\n@@ -1,1 +1,2 @@\n+"""Module."""\n VALUE = 1\n'
+    summary = apply_patch(diff, _ctx(tmp_path))
+    assert summary == ["updated mod.py"]
+    assert (tmp_path / "mod.py").read_text(encoding="utf-8") == '"""Module."""\nVALUE = 1\n'

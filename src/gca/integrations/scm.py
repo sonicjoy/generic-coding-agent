@@ -274,6 +274,13 @@ class PublicationController:
         )
         configured_broker = CredentialBroker.from_environment(include_names=configured_names)
         broker = CredentialBroker({**self.credentials.secrets, **configured_broker.secrets})
+        if not policy.required_checks:
+            _run_default_python_syntax_check(
+                workspace,
+                self.credentials,
+                repo_config,
+                executor=executor,
+            )
         for name in policy.required_checks:
             command = repo_config.tools.fixed_commands.get(name)
             if command is None:
@@ -296,6 +303,66 @@ class PublicationController:
             result = FixedCommandTool(command).run(context.for_tool(name))
             if not result.ok:
                 raise PublicationError(f"required check {name!r} failed:\n{result.output}")
+
+
+def _changed_python_paths(workspace: Path, credentials: CredentialBroker) -> list[str]:
+    """Return workspace-relative ``.py`` paths changed since ``HEAD``."""
+
+    tracked = _git(
+        workspace,
+        ["diff", "--name-only", "--diff-filter=ACMR", "HEAD"],
+        credentials,
+    )
+    untracked = _git(
+        workspace,
+        ["ls-files", "--others", "--exclude-standard"],
+        credentials,
+    )
+    paths: list[str] = []
+    for line in f"{tracked}\n{untracked}".splitlines():
+        relative = line.strip()
+        if not relative.endswith(".py"):
+            continue
+        if (workspace / relative).is_file():
+            paths.append(relative)
+    return sorted(set(paths))
+
+
+def _run_default_python_syntax_check(
+    workspace: Path,
+    credentials: CredentialBroker,
+    repo_config: RepoConfig,
+    *,
+    executor: CommandExecutor | None,
+) -> None:
+    """Fail publication when changed Python files do not compile.
+
+    Used only when the repository did not configure ``publication.required_checks``.
+    Runs through the isolation executor (never a host-subprocess fallback).
+    """
+
+    paths = _changed_python_paths(workspace, credentials)
+    if not paths:
+        return
+    if executor is None:
+        raise PublicationError(
+            "default Python syntax check requires a command executor when .py files changed"
+        )
+    argv = ["python", "-m", "compileall", "-q", *paths]
+    result = executor.run(
+        argv=argv,
+        cwd=workspace,
+        env=credentials.subprocess_env("hosted"),
+        timeout=min(120, repo_config.runtime.max_tool_timeout),
+    )
+    output = credentials.redact(result.output)
+    if result.timed_out:
+        raise PublicationError(f"default Python syntax check timed out:\n{output}")
+    if result.returncode != 0:
+        raise PublicationError(
+            "default Python syntax check failed "
+            f"($ {shlex.join(argv)}, exit {result.returncode}):\n{output.strip()}"
+        )
 
 
 def _git(
