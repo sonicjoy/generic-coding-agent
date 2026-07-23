@@ -1,8 +1,8 @@
 """Built-in command-execution tool.
 
-Runs a shell command inside the workspace with a timeout, capturing combined
-stdout/stderr and the exit code. This backs the agent's ability to run tests,
-linters, formatters, build commands, dev servers, and static-analysis tools.
+Runs a shell command inside the workspace isolation container with a timeout,
+capturing combined stdout/stderr and the exit code. This backs the agent's
+ability to run tests, linters, formatters, builds, and static-analysis tools.
 
 Destructive commands (``rm``, forced git rewrites, ``sudo``, etc.) are rejected
 before execution by :mod:`gca.tools.safety`.
@@ -10,10 +10,9 @@ before execution by :mod:`gca.tools.safety`.
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 
-from gca.tools.base import Tool, ToolContext, ToolResult
+from gca.tools.base import Tool, ToolContext, ToolError, ToolResult
 from gca.tools.safety import check_command
 
 _DEFAULT_TIMEOUT = 120
@@ -52,31 +51,32 @@ class RunCommandTool(Tool):
             return ToolResult.failure(
                 f"blocked by safety guardrail ({blocked.rule}): {blocked.reason}"
             )
+        if ctx.executor is None:
+            raise ToolError("command executor is not configured for this run")
         requested_timeout = int(kwargs.get("timeout", _DEFAULT_TIMEOUT))
         timeout = max(1, min(requested_timeout, ctx.execution.max_tool_timeout))
-        try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                cwd=str(ctx.workspace),
-                env=ctx.subprocess_env(),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult.failure(f"command timed out after {timeout}s: {command}")
+        result = ctx.executor.run(
+            shell_command=command,
+            cwd=ctx.workspace,
+            env=ctx.subprocess_env(),
+            timeout=timeout,
+        )
+        if result.timed_out:
+            return ToolResult.failure(result.output)
 
-        output = ctx.redact((proc.stdout or "") + (proc.stderr or ""))
+        output = ctx.redact(result.output)
         output_limit = min(_MAX_OUTPUT, ctx.execution.max_output_chars)
         if len(output) > output_limit:
             output = output[:output_limit] + "\n... (output truncated)"
-        header = f"$ {command}\n(exit code: {proc.returncode})\n"
-        result = header + output
-        if proc.returncode == 0:
-            return ToolResult.success(result)
-        return ToolResult.failure(result)
+        header = f"$ {command}\n(exit code: {result.returncode})\n"
+        rendered = header + output
+        if result.returncode == 0:
+            return ToolResult.success(rendered)
+        return ToolResult.failure(rendered)
 
 
 def shell_tools() -> list[Tool]:
     return [RunCommandTool()]
+
+
+__all__ = ["RunCommandTool", "shell_tools"]

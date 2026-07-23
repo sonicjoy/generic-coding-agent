@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from gca.credentials import CredentialBroker
+from gca.executor.fake import FakeExecutor
 from gca.repo_config import CommandParameterConfig, FixedCommandConfig
 from gca.tools.base import ExecutionPolicy, ToolContext
 from gca.tools.fixed import FixedCommandTool
@@ -24,7 +25,7 @@ def test_fixed_command_executes_argv_and_bounded_parameter(tmp_path: Path) -> No
         },
     )
     tool = FixedCommandTool(config)
-    ctx = ToolContext(workspace=tmp_path)
+    ctx = ToolContext(workspace=tmp_path, executor=FakeExecutor(execute_locally=True))
 
     result = tool.run(ctx, value="two")
     rejected = tool.run(ctx, value="three")
@@ -49,6 +50,7 @@ def test_fixed_command_does_not_inherit_credentials(tmp_path: Path, monkeypatch:
         workspace=tmp_path,
         credentials=CredentialBroker.from_environment(os.environ),
         execution=ExecutionPolicy(profile="hosted"),
+        executor=FakeExecutor(execute_locally=True),
     )
 
     result = FixedCommandTool(config).run(ctx)
@@ -68,7 +70,7 @@ def test_fixed_command_still_obeys_core_safety_rules(tmp_path: Path) -> None:
         )
     )
 
-    result = tool.run(ToolContext(workspace=tmp_path))
+    result = tool.run(ToolContext(workspace=tmp_path, executor=FakeExecutor(execute_locally=True)))
 
     assert not result.ok
     assert "blocked by safety guardrail" in result.output
@@ -99,6 +101,7 @@ def test_fixed_command_receives_only_explicitly_scoped_secret(
         workspace=tmp_path,
         credentials=broker,
         tool_secret_access={"check_database": frozenset({"DATABASE_URL"})},
+        executor=FakeExecutor(execute_locally=True),
     )
 
     result = tool.run(context.for_tool("check_database"))

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from gca.executor.fake import FakeExecutor
 from gca.tools.base import ToolContext
 from gca.tools.safety import check_command
 from gca.tools.shell import RunCommandTool
@@ -80,7 +81,7 @@ def test_run_command_tool_rejects_before_execution(tmp_path: Path) -> None:
     target = tmp_path / "keep.txt"
     target.write_text("safe", encoding="utf-8")
     result = RunCommandTool().run(
-        ToolContext(workspace=tmp_path),
+        ToolContext(workspace=tmp_path, executor=FakeExecutor(execute_locally=True)),
         command="rm -rf keep.txt",
     )
     assert not result.ok
@@ -91,7 +92,7 @@ def test_run_command_tool_rejects_before_execution(tmp_path: Path) -> None:
 
 def test_allows_python_c_with_semicolons(tmp_path: Path) -> None:
     result = RunCommandTool().run(
-        ToolContext(workspace=tmp_path),
+        ToolContext(workspace=tmp_path, executor=FakeExecutor(execute_locally=True)),
         command="python -c \"import sys; print('ok')\"",
     )
     assert result.ok

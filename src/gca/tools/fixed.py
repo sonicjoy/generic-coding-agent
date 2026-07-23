@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
 from typing import Any
 
 from gca.repo_config import CommandParameterConfig, FixedCommandConfig
-from gca.tools.base import Tool, ToolContext, ToolResult
+from gca.tools.base import Tool, ToolContext, ToolError, ToolResult
 from gca.tools.safety import check_command
 
 
@@ -46,32 +45,27 @@ class FixedCommandTool(Tool):
             return ToolResult.failure(
                 f"blocked by safety guardrail ({blocked.rule}): {blocked.reason}"
             )
+        if ctx.executor is None:
+            raise ToolError("command executor is not configured for this run")
         timeout = min(self.config.timeout, ctx.execution.max_tool_timeout)
         environment = ctx.subprocess_env()
         for name in ctx.allowed_secrets:
             environment[name] = ctx.secret(name)
-        try:
-            proc = subprocess.run(
-                argv,
-                shell=False,
-                cwd=str(self.config.cwd),
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult.failure(f"command timed out after {timeout}s: {rendered_command}")
-        except OSError as exc:
-            return ToolResult.failure(f"could not execute {argv[0]!r}: {exc}")
-
-        output = (proc.stdout or "") + (proc.stderr or "")
-        output = ctx.redact(output)
+        result = ctx.executor.run(
+            argv=argv,
+            cwd=self.config.cwd,
+            env=environment,
+            timeout=timeout,
+        )
+        if result.timed_out:
+            return ToolResult.failure(result.output)
+        output = ctx.redact(result.output)
         if len(output) > ctx.execution.max_output_chars:
             output = output[: ctx.execution.max_output_chars] + "\n... (output truncated)"
-        result = f"$ {rendered_command}\n(exit code: {proc.returncode})\n{output}"
-        return ToolResult.success(result) if proc.returncode == 0 else ToolResult.failure(result)
+        rendered = f"$ {rendered_command}\n(exit code: {result.returncode})\n{output}"
+        return (
+            ToolResult.success(rendered) if result.returncode == 0 else ToolResult.failure(rendered)
+        )
 
 
 def _parameter_schema(parameters: dict[str, CommandParameterConfig]) -> dict[str, Any]:

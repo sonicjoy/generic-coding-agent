@@ -28,6 +28,17 @@ runtime:
   max_output_chars: 20000
   max_read_bytes: 1000000
 
+# Optional container limits for the isolation image. Omit dockerfile to use
+# GCA's packaged default isolation image, or set dockerfile: Dockerfile.agent.
+# environment:
+#   dockerfile: Dockerfile.agent
+#   working_dir: /workspace
+#   cpu: 2
+#   memory: 4g
+#   network: false
+#   default_timeout: 300
+#   remove_image_after_run: false
+
 tools:
   deny: []
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from gca.credentials import CredentialBroker
+from gca.executor.protocol import CommandExecutor
 from gca.integrations.repository import repository_identity
 from gca.jobs.models import Job
 from gca.repo_config import RepoConfig
@@ -159,6 +160,8 @@ class PublicationController:
         job: Job,
         workspace: Path,
         repo_config: RepoConfig,
+        *,
+        executor: CommandExecutor | None = None,
     ) -> dict[str, object]:
         """Publish one completed job through its configured SCM target."""
 
@@ -171,7 +174,7 @@ class PublicationController:
         if not adapter.supports_repository(job.run_spec.repository.url):
             raise PublicationError(f"{target.provider} adapter does not match repository host")
         policy = PublicationPolicy.from_mapping(repo_config.publication)
-        self._run_required_checks(job, workspace, repo_config, policy)
+        self._run_required_checks(job, workspace, repo_config, policy, executor=executor)
 
         branch = _branch_name(target.branch_prefix, job.id)
         _git(workspace, ["check-ref-format", "--branch", branch], self.credentials)
@@ -246,6 +249,8 @@ class PublicationController:
         workspace: Path,
         repo_config: RepoConfig,
         policy: PublicationPolicy,
+        *,
+        executor: CommandExecutor | None = None,
     ) -> None:
         try:
             project = repository_identity(job.run_spec.repository.url)
@@ -286,6 +291,7 @@ class PublicationController:
                     max_read_bytes=repo_config.runtime.max_read_bytes,
                 ),
                 credentials=broker,
+                executor=executor,
             )
             result = FixedCommandTool(command).run(context.for_tool(name))
             if not result.ok:

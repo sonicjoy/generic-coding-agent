@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from dataclasses import replace
 from pathlib import Path
 
+from gca.executor.lifecycle import RunLifecycle
 from gca.integrations.scm import PublicationPolicy
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
 from gca.jobs.queue import SqliteJobQueue
@@ -17,6 +19,7 @@ from gca.plugins import LoadedPlugins
 from gca.repo_config import RepoConfigError, load_repo_config
 from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import SessionStore
+from gca.workspace.layout import JobWorkspace, normalize_run_id
 
 
 def _default_sessions_dir(workspace: Path) -> Path:
@@ -85,39 +88,154 @@ def _event_printer(message: str) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    config = _build_config(args)
-    store = SessionStore(config.sessions_dir)
-    loaded = _load_models(args, config)
-    session = store.create(args.task)
-    print(f"session: {session.id}", file=sys.stderr)
-    coordinator = create_coordinator(
-        config,
-        loaded.models,
-        loaded_plugins=loaded,
-        on_event=_event_printer,
+    source = Path(args.workspace).resolve()
+    try:
+        source_config = load_repo_config(source)
+    except RepoConfigError as exc:
+        raise SystemExit(f"Invalid .gca/config.yaml: {exc}") from exc
+
+    runs_root = source / ".gca" / "runs"
+    bootstrap_sessions = SessionStore(
+        Path(args.sessions_dir) if args.sessions_dir else _default_sessions_dir(source)
     )
-    result = coordinator.run(session, store)
-    print(f"\nstatus: {result.status} (steps: {result.steps})")
-    print(result.final_message)
-    return 0 if result.status == "completed" else 1
+    session = bootstrap_sessions.create(args.task)
+    print(f"session: {session.id}", file=sys.stderr)
+
+    lifecycle = RunLifecycle.for_local_run(
+        source,
+        runs_root,
+        source_config,
+        run_id=session.id,
+    )
+    result_status = "failed"
+    try:
+        sessions_dir = (
+            Path(args.sessions_dir)
+            if args.sessions_dir
+            else lifecycle.workspace.parent / "sessions"
+        )
+        config = replace(
+            _build_config(args),
+            workspace=lifecycle.workspace,
+            sessions_dir=sessions_dir,
+            repo_config=load_repo_config(lifecycle.workspace),
+            executor=lifecycle.executor,
+        )
+        store = SessionStore(config.sessions_dir)
+        store.save(session)
+        loaded = _load_models(args, config)
+        coordinator = create_coordinator(
+            config,
+            loaded.models,
+            loaded_plugins=loaded,
+            on_event=_event_printer,
+        )
+        result = coordinator.run(session, store)
+        result_status = result.status
+        if result.status == "completed":
+            synced = lifecycle.sync_back()
+            if synced.changed_files:
+                print(
+                    f"synced {len(synced.changed_files)} file(s) back to {source}",
+                    file=sys.stderr,
+                )
+        else:
+            print(
+                f"ephemeral workspace preserved at: {lifecycle.workspace}",
+                file=sys.stderr,
+            )
+        print(f"\nstatus: {result.status} (steps: {result.steps})")
+        print(result.final_message)
+        return 0 if result.status == "completed" else 1
+    finally:
+        lifecycle.cleanup(wipe_workspace=result_status == "completed")
 
 
 def _cmd_resume(args: argparse.Namespace) -> int:
+    source = Path(args.workspace).resolve()
     config = _build_config(args)
+    runs_root = source / ".gca" / "runs"
+    ephemeral: JobWorkspace | None = None
+    try:
+        layout = JobWorkspace.under(runs_root, normalize_run_id(args.session_id))
+        if layout.repository.is_dir():
+            ephemeral = layout
+    except ValueError:
+        ephemeral = None
+
+    if ephemeral is not None:
+        repo_config = load_repo_config(ephemeral.repository)
+        lifecycle = RunLifecycle.for_repository(
+            ephemeral.repository,
+            repo_config,
+            run_id=args.session_id,
+        )
+        result_status = "failed"
+        try:
+            config = replace(
+                config,
+                workspace=ephemeral.repository,
+                sessions_dir=ephemeral.sessions,
+                repo_config=repo_config,
+                executor=lifecycle.executor,
+            )
+            store = SessionStore(config.sessions_dir)
+            loaded = _load_models(args, config)
+            session = store.load(args.session_id)
+            print(f"resuming session: {session.id}", file=sys.stderr)
+            coordinator = create_coordinator(
+                config,
+                loaded.models,
+                loaded_plugins=loaded,
+                on_event=_event_printer,
+            )
+            result = coordinator.run(session, store)
+            result_status = result.status
+            if result.status == "completed":
+                sync_lifecycle = RunLifecycle(
+                    run_id=lifecycle.run_id,
+                    workspace=ephemeral.repository,
+                    executor=lifecycle.executor,
+                    source_workspace=source,
+                    baseline_hashes={},
+                )
+                synced = sync_lifecycle.sync_back()
+                if synced.changed_files:
+                    print(
+                        f"synced {len(synced.changed_files)} file(s) back to {source}",
+                        file=sys.stderr,
+                    )
+            print(f"\nstatus: {result.status} (steps: {result.steps})")
+            print(result.final_message)
+            return 0 if result.status == "completed" else 1
+        finally:
+            lifecycle.cleanup(wipe_workspace=result_status == "completed")
+            if result_status == "completed" and ephemeral.root.exists():
+                shutil.rmtree(ephemeral.root, ignore_errors=True)
+
     store = SessionStore(config.sessions_dir)
     loaded = _load_models(args, config)
     session = store.load(args.session_id)
     print(f"resuming session: {session.id}", file=sys.stderr)
-    coordinator = create_coordinator(
-        config,
-        loaded.models,
-        loaded_plugins=loaded,
-        on_event=_event_printer,
+    lifecycle = RunLifecycle.for_repository(
+        config.workspace,
+        config.repo_config or load_repo_config(config.workspace),
+        run_id=session.id,
     )
-    result = coordinator.run(session, store)
-    print(f"\nstatus: {result.status} (steps: {result.steps})")
-    print(result.final_message)
-    return 0 if result.status == "completed" else 1
+    try:
+        config = replace(config, executor=lifecycle.executor)
+        coordinator = create_coordinator(
+            config,
+            loaded.models,
+            loaded_plugins=loaded,
+            on_event=_event_printer,
+        )
+        result = coordinator.run(session, store)
+        print(f"\nstatus: {result.status} (steps: {result.steps})")
+        print(result.final_message)
+        return 0 if result.status == "completed" else 1
+    finally:
+        lifecycle.cleanup(wipe_workspace=False)
 
 
 def _cmd_sessions(args: argparse.Namespace) -> int:

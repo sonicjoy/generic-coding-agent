@@ -8,6 +8,7 @@ from pathlib import Path
 from gca.agent import Agent, AgentConfig, AgentResult
 from gca.complexity import classify_task
 from gca.credentials import CredentialBroker
+from gca.executor.protocol import CommandExecutor
 from gca.models import ModelProfile, ModelRegistry
 from gca.personas import PersonaSet
 from gca.providers.base import Message
@@ -80,6 +81,7 @@ class RunCoordinator:
         personas: PersonaSet | None = None,
         config_fingerprint: str = "",
         on_event: EventHook | None = None,
+        executor: CommandExecutor | None = None,
     ) -> None:
         self.workspace = workspace
         self.max_steps = max_steps
@@ -94,6 +96,7 @@ class RunCoordinator:
         self.execution_policy = execution_policy
         self.credentials = credentials
         self.on_event = on_event
+        self.executor = executor
 
     def run(self, session: Session, store: SessionStore) -> AgentResult:
         """Run or resume the selected workflow."""
@@ -401,6 +404,7 @@ class RunCoordinator:
             tool_secret_access=self.repo_config.tools.secret_access,
             execution=self.execution_policy,
             credentials=self.credentials,
+            executor=self.executor,
         )
 
     def _phase_system_prompt(self, phase: str) -> str:

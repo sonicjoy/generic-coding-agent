@@ -1,0 +1,38 @@
+# Local / cloud-like bring-up for the GCA API + worker.
+# Requires Docker Engine on the host. The worker mounts the host docker socket
+# so per-run isolation containers can be built and executed.
+#
+#   cp examples/service.env.example .env   # edit tokens
+#   docker compose up --build
+
+services:
+  api:
+    build: .
+    image: gca:local
+    command: ["gca-service", "api", "--host", "0.0.0.0", "--port", "8080"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      GCA_DATA_DIR: /var/lib/gca
+    ports:
+      - "8080:8080"
+    volumes:
+      - gca-data:/var/lib/gca
+
+  worker:
+    image: gca:local
+    depends_on:
+      - api
+    command: ["gca-service", "worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      GCA_DATA_DIR: /var/lib/gca
+    volumes:
+      - gca-data:/var/lib/gca
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  gca-data:
