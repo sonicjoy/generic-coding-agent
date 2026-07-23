@@ -56,6 +56,8 @@ tools:
 
 # Service-owned publication can require fixed checks and bound the diff.
 # Auto-merge also requires the operator ceiling GCA_ALLOW_AUTO_MERGE_PROJECTS.
+# When required_checks is omitted, GCA still parse-checks changed .py files and
+# runs ruff/mypy through the isolation image when those tools are installed.
 #
 # publication:
 #   required_checks: [run_tests]

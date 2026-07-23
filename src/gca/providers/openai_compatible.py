@@ -23,6 +23,7 @@ from gca.providers.base import (
     ToolCall,
     ToolSpec,
 )
+from gca.providers.tool_arguments import parse_tool_arguments
 
 _MAX_RESPONSE_BYTES = 10_000_000
 
@@ -136,19 +137,11 @@ class OpenAICompatibleProvider(LLMProvider):
         tool_calls: list[ToolCall] = []
         for raw in choice.get("tool_calls") or []:
             function = raw.get("function") or {}
-            arguments = function.get("arguments") or {}
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments) if arguments.strip() else {}
-                except json.JSONDecodeError:
-                    arguments = {"_raw": arguments}
-            if not isinstance(arguments, dict):
-                arguments = {"_raw": arguments}
             tool_calls.append(
                 ToolCall(
                     id=str(raw.get("id") or f"call_{uuid.uuid4().hex[:8]}"),
                     name=str(function.get("name") or ""),
-                    arguments=dict(arguments),
+                    arguments=parse_tool_arguments(function.get("arguments") or {}),
                 )
             )
         return LLMResponse(content=content, tool_calls=tool_calls)

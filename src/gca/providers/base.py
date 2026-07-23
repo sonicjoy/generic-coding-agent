@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from gca.providers.tool_arguments import parse_tool_arguments
+
 
 class ProviderError(RuntimeError):
     """Provider failure with retry classification for hosted jobs."""
@@ -37,7 +39,7 @@ class ToolCall:
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
-            arguments=dict(data.get("arguments", {})),
+            arguments=parse_tool_arguments(data.get("arguments", {})),
         )
 
 

@@ -60,6 +60,40 @@ def test_search_finds_matches(tmp_path: Path) -> None:
     assert "code.py:1" in result.output
 
 
+def test_write_rejects_invalid_python(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    # Model over-escape failure mode from PR #29 / issue #33.
+    corrupted = '\\"""doc"""\nVALUE = 1\n'
+    result = WriteFileTool().run(ctx, path="broken.py", content=corrupted)
+    assert not result.ok
+    assert "syntax error" in result.output
+    assert "JSON-over-escaped" in result.output
+    assert not (tmp_path / "broken.py").exists()
+
+
+def test_write_allows_valid_python_with_quotes(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    content = '"""Module docstring."""\nVALUE = "hello"\n'
+    result = WriteFileTool().run(ctx, path="ok.py", content=content)
+    assert result.ok
+    assert (tmp_path / "ok.py").read_text(encoding="utf-8") == content
+
+
+def test_create_rejects_invalid_python(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    result = CreateFileTool().run(ctx, path="bad.py", content="def broken(:\n")
+    assert not result.ok
+    assert "syntax error" in result.output
+    assert not (tmp_path / "bad.py").exists()
+
+
+def test_write_non_python_skips_syntax_check(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    result = WriteFileTool().run(ctx, path="notes.txt", content="not python {")
+    assert result.ok
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "not python {"
+
+
 def test_path_escape_is_blocked(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     try:

@@ -18,6 +18,7 @@ from gca.jobs.models import Job
 from gca.repo_config import RepoConfig
 from gca.tools.base import ExecutionPolicy, ToolContext
 from gca.tools.fixed import FixedCommandTool
+from gca.tools.python_source import validate_python_source
 
 _CORE_DENIED_PATHS = (
     ".gca/config.yaml",
@@ -274,6 +275,15 @@ class PublicationController:
         )
         configured_broker = CredentialBroker.from_environment(include_names=configured_names)
         broker = CredentialBroker({**self.credentials.secrets, **configured_broker.secrets})
+        # Always parse-check changed Python before any repo-defined checks or push.
+        _run_python_syntax_gate(workspace, self.credentials)
+        if not policy.required_checks:
+            _run_default_quality_gates(
+                workspace,
+                self.credentials,
+                repo_config,
+                executor=executor,
+            )
         for name in policy.required_checks:
             command = repo_config.tools.fixed_commands.get(name)
             if command is None:
@@ -296,6 +306,98 @@ class PublicationController:
             result = FixedCommandTool(command).run(context.for_tool(name))
             if not result.ok:
                 raise PublicationError(f"required check {name!r} failed:\n{result.output}")
+
+
+def _changed_python_paths(workspace: Path, credentials: CredentialBroker) -> list[str]:
+    """Return workspace-relative ``.py`` paths changed since ``HEAD``."""
+
+    tracked = _git(
+        workspace,
+        ["diff", "--name-only", "--diff-filter=ACMR", "HEAD"],
+        credentials,
+    )
+    untracked = _git(
+        workspace,
+        ["ls-files", "--others", "--exclude-standard"],
+        credentials,
+    )
+    paths: list[str] = []
+    for line in f"{tracked}\n{untracked}".splitlines():
+        relative = line.strip()
+        if not relative.endswith(".py"):
+            continue
+        if (workspace / relative).is_file():
+            paths.append(relative)
+    return sorted(set(paths))
+
+
+def _run_python_syntax_gate(workspace: Path, credentials: CredentialBroker) -> None:
+    """Fail publication when changed Python files do not parse.
+
+    Runs in-process against the workspace checkout so it does not depend on
+    Python being installed inside the isolation image (the packaged default
+    image is shell/git only).
+    """
+
+    for relative in _changed_python_paths(workspace, credentials):
+        content = (workspace / relative).read_text(encoding="utf-8")
+        error = validate_python_source(relative, content)
+        if error is not None:
+            raise PublicationError(f"publication quality gate failed: {error}")
+
+
+def _run_default_quality_gates(
+    workspace: Path,
+    credentials: CredentialBroker,
+    repo_config: RepoConfig,
+    *,
+    executor: CommandExecutor | None,
+) -> None:
+    """Run lint/type quality gates when the repo did not configure required_checks.
+
+    Attempts ``ruff check`` and ``python -m mypy`` on changed ``.py`` files through
+    the isolation executor. Missing tools are skipped; installed tools that fail
+    block publication.
+    """
+
+    paths = _changed_python_paths(workspace, credentials)
+    if not paths or executor is None:
+        return
+    timeout = min(120, repo_config.runtime.max_tool_timeout)
+    env = credentials.subprocess_env("hosted")
+    gates = (
+        ("ruff", ["ruff", "check", *paths]),
+        ("mypy", ["python", "-m", "mypy", "--follow-imports=skip", *paths]),
+    )
+    for name, argv in gates:
+        result = executor.run(argv=argv, cwd=workspace, env=env, timeout=timeout)
+        output = credentials.redact(result.output)
+        if result.timed_out:
+            raise PublicationError(f"publication quality gate {name!r} timed out:\n{output}")
+        if _quality_tool_unavailable(result.returncode, output):
+            continue
+        if result.returncode != 0:
+            raise PublicationError(
+                f"publication quality gate {name!r} failed "
+                f"($ {shlex.join(argv)}, exit {result.returncode}):\n{output.strip()}"
+            )
+
+
+def _quality_tool_unavailable(returncode: int, output: str) -> bool:
+    """Return True when a quality-gate binary/module is not installed."""
+
+    if returncode == 127:
+        return True
+    lowered = output.lower()
+    markers = (
+        "not found",
+        "no such file",
+        "no module named",
+        "cannot find the file",
+        "is not recognized",
+        "unable to locate",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _git(

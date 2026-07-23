@@ -530,6 +530,12 @@ publication:
   auto_merge: false
 ```
 
+When `required_checks` is omitted, publication still runs default quality
+gates on changed `.py` files: an in-process syntax parse (so unparseable
+Python cannot be pushed even when the isolation image has no Python), then
+`ruff check` and `python -m mypy` through the isolation executor when those
+tools are installed. Missing tools are skipped; failing tools block publish.
+
 The bundled SQLite store supports a single node with multiple worker processes
 and serializes jobs targeting the same repository. Deployments with ephemeral
 filesystems or horizontal nodes must provide durable shared storage and a

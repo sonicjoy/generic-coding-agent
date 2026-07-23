@@ -10,6 +10,7 @@ from typing import Any
 
 from gca.paths import IGNORED_DIRS
 from gca.tools.base import Tool, ToolContext, ToolError, ToolResult
+from gca.tools.python_source import validate_python_source
 
 
 class ExploreTool(Tool):
@@ -128,6 +129,9 @@ class WriteFileTool(Tool):
     def run(self, ctx: ToolContext, **kwargs: Any) -> ToolResult:
         path = str(kwargs["path"])
         content = str(kwargs["content"])
+        syntax_error = validate_python_source(path, content)
+        if syntax_error is not None:
+            return ToolResult.failure(syntax_error)
         target = ctx.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -152,6 +156,9 @@ class CreateFileTool(Tool):
     def run(self, ctx: ToolContext, **kwargs: Any) -> ToolResult:
         path = str(kwargs["path"])
         content = str(kwargs.get("content", ""))
+        syntax_error = validate_python_source(path, content)
+        if syntax_error is not None:
+            return ToolResult.failure(syntax_error)
         target = ctx.resolve(path)
         if target.exists():
             return ToolResult.failure(f"already exists: {path}")
