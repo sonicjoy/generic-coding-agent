@@ -118,6 +118,57 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
     assert client.post("/webhooks/github", content=body, headers=forged_headers).status_code == 401
 
 
+def test_github_pull_request_review_webhook_enqueues_run(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings))
+    body = json.dumps(
+        {
+            "action": "submitted",
+            "review": {
+                "state": "changes_requested",
+                "body": "Please cover the GitHub /runs resume path.",
+            },
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "pull_request": {
+                "number": 43,
+                "title": "Budget pause follow-up",
+                "head": {"ref": "gca/review-head"},
+                "base": {"ref": "main"},
+            },
+        }
+    ).encode()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret-123456",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    response = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request_review",
+            "X-GitHub-Delivery": "delivery-pr-review",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 202
+    job = ServiceState.build(settings).store.load(response.json()["id"])
+    assert job.run_spec.repository.ref == "gca/review-head"
+    assert job.run_spec.publication is not None
+    assert job.run_spec.publication.base_ref == "main"
+    assert job.run_spec.labels["pr_id"] == "43"
+    assert job.run_spec.labels["source"] == "pull_request_review.changes_requested"
+
+
 def test_github_webhook_applies_service_default_max_steps(tmp_path: Path) -> None:
     settings = ServiceSettings(
         data_dir=tmp_path / "service-budget",

@@ -18,13 +18,25 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _emit(message: str) -> None:
+    """Write worker progress immediately (file redirects are block-buffered)."""
+
+    print(message, flush=True)
+
+
 def _worker(args: argparse.Namespace) -> int:
     settings = ServiceSettings.from_environment()
     state = ServiceState.build(settings)
-    worker = ServiceWorker(state, on_event=print)
+    worker = ServiceWorker(state, on_event=_emit)
     if args.once:
         job = worker.run_once()
-        print("idle" if job is None else f"{job.id} {job.status.value}")
+        if job is None:
+            _emit("idle")
+        else:
+            line = f"{job.id} {job.status.value}"
+            if job.last_error:
+                line = f"{line}: {job.last_error}"
+            _emit(line)
         return 0 if job is None or job.status.value == "completed" else 1
     worker.run_forever()
     return 0

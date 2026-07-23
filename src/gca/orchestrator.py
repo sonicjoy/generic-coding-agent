@@ -468,9 +468,13 @@ class RunCoordinator:
         reserve = self.policy.review_step_reserve
         if reserve < 0:
             reserve = REVIEW_STEP_RESERVE
+        # Only the first implementation pass is capped. Rework after review must
+        # still be able to spend remaining budget (reserve already protected the
+        # first review transition).
         if (
             phase == "implementation"
             and workflow.name != WORKFLOW_FAST
+            and workflow.review_cycles == 0
             and self.max_steps > reserve
         ):
             remaining = max(1, remaining - reserve)

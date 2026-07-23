@@ -255,9 +255,7 @@ class JobRunner:
                     )
                     try:
                         job.publication = dict(
-                            self.publisher.publish(
-                                job, repository, repo_config, executor=executor
-                            )
+                            self.publisher.publish(job, repository, repo_config, executor=executor)
                         )
                     finally:
                         # Restore the operator-requested draft flag for resume/complete.
@@ -267,15 +265,15 @@ class JobRunner:
                         pause_error = f"{pause_error} Draft change request opened: {url}"
                 except PublicationError as exc:
                     detail = self.credentials.redact(str(exc))
-                    pause_error = (
-                        f"{pause_error} Draft publication on pause failed: {detail}"
-                    )
+                    pause_error = f"{pause_error} Draft publication on pause failed: {detail}"
             transition_job(job, JobStatus.PAUSED, error=pause_error)
             self.store.save(job)
+            self._emit_job_status(job)
             return
         if result.status == STATUS_FAILED:
             transition_job(job, JobStatus.FAILED, error=result.final_message)
             self.store.save(job)
+            self._emit_job_status(job)
             return
         if result.status != STATUS_COMPLETED:
             raise RuntimeError(f"unsupported agent result status: {result.status}")
@@ -289,9 +287,8 @@ class JobRunner:
                 "github": "GCA_GITHUB_TOKEN",
                 "gitlab": "GCA_GITLAB_TOKEN",
             }.get(provider)
-            error = (
-                f"publication to '{provider}' requested but no SCM publisher is configured"
-                + (f" (is {env_var} set?)" if env_var else "")
+            error = f"publication to '{provider}' requested but no SCM publisher is configured" + (
+                f" (is {env_var} set?)" if env_var else ""
             )
             transition_job(
                 job,
@@ -299,9 +296,11 @@ class JobRunner:
                 error=error,
             )
             self.store.save(job)
+            self._emit_job_status(job)
             return
         transition_job(job, JobStatus.PUBLISHING)
         self.store.save(job)
+        self._emit(f"[job] {job.id} publishing")
         self._heartbeat(job)
         job.publication = dict(
             self.publisher.publish(job, repository, repo_config, executor=executor)
@@ -323,15 +322,29 @@ class JobRunner:
         else:
             transition_job(job, JobStatus.FAILED, error=message)
         self.store.save(job)
+        # Publication and other post-agent failures must appear in the worker log,
+        # not only on the job record returned by GET /runs/{id}.
+        self._emit_job_status(job)
 
     def _heartbeat(self, job: Job) -> None:
         if self.lease_heartbeat is not None:
             self.lease_heartbeat(job)
 
-    def _on_agent_event(self, job: Job, message: str) -> None:
-        self._heartbeat(job)
+    def _emit(self, message: str) -> None:
         if self.on_event is not None:
             self.on_event(message)
+
+    def _emit_job_status(self, job: Job) -> None:
+        """Emit durable job status (and last_error when set) to the event sink."""
+
+        line = f"[job] {job.id} {job.status.value}"
+        if job.last_error:
+            line = f"{line}: {job.last_error}"
+        self._emit(line)
+
+    def _on_agent_event(self, job: Job, message: str) -> None:
+        self._heartbeat(job)
+        self._emit(message)
 
 
 def _implementation_summary(session: Session) -> str | None:
