@@ -10,6 +10,8 @@ from typing import Protocol
 
 from gca.agent import AgentResult, EventHook
 from gca.credentials import CredentialBroker
+from gca.executor.lifecycle import RunLifecycle, should_wipe_workspace
+from gca.executor.protocol import CommandExecutor
 from gca.git_credentials import GitCredentials
 from gca.integrations.http import IntegrationHttpError
 from gca.integrations.scm import PublicationError
@@ -34,12 +36,15 @@ class Publisher(Protocol):
         job: Job,
         workspace: Path,
         repo_config: RepoConfig,
+        *,
+        executor: CommandExecutor | None = None,
     ) -> dict[str, object]: ...
 
 
 RuntimeModelLoader = Callable[[RuntimeConfig], LoadedPlugins]
 LeaseHeartbeat = Callable[[Job], None]
 RepositoryCredentialResolver = Callable[[RepositorySpec], GitCredentials | None]
+ExecutorFactory = Callable[[Path, RepoConfig, str], CommandExecutor]
 
 
 class JobRunner:
@@ -62,6 +67,7 @@ class JobRunner:
         lease_heartbeat: LeaseHeartbeat | None = None,
         repository_credentials: RepositoryCredentialResolver | None = None,
         allowed_tool_secret_grants: Mapping[str, frozenset[str]] | None = None,
+        executor_factory: ExecutorFactory | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
@@ -77,6 +83,7 @@ class JobRunner:
         self.lease_heartbeat = lease_heartbeat
         self.repository_credentials = repository_credentials
         self.allowed_tool_secret_grants = dict(allowed_tool_secret_grants or {})
+        self.executor_factory = executor_factory
         self.credentials = CredentialBroker.from_environment()
 
     def execute(self, job: Job) -> Job:
@@ -86,6 +93,7 @@ class JobRunner:
             raise ValueError("job must be claimed before execution")
         layout = JobWorkspace.under(self.workspace_root, job.id)
         layout.ensure_metadata()
+        lifecycle: RunLifecycle | None = None
         try:
             self._heartbeat(job)
             repository_destination = layout.repository.resolve()
@@ -106,20 +114,33 @@ class JobRunner:
             job.workspace_path = str(repository)
             self.store.save(job)
             self._heartbeat(job)
-            result, repo_config = self._run_agent(job, layout)
+            repo_config = self._load_repo_config(layout.repository)
+            lifecycle = self._build_lifecycle(job, layout.repository, repo_config)
+            result = self._run_agent(job, layout, repo_config, lifecycle.executor)
             self._heartbeat(job)
-            self._apply_result(job, result, repository, repo_config)
+            self._apply_result(job, result, repository, repo_config, lifecycle.executor)
         except Exception as exc:
             self._handle_failure(job, exc)
+        finally:
+            if lifecycle is not None:
+                lifecycle.cleanup(wipe_workspace=should_wipe_workspace(job.status.value))
         return job
 
-    def _run_agent(self, job: Job, layout: JobWorkspace) -> tuple[AgentResult, RepoConfig]:
-        repo_config = load_repo_config(layout.repository)
+    def _load_repo_config(self, repository: Path) -> RepoConfig:
+        repo_config = load_repo_config(repository)
         if self.hosted_mode and repo_config.runtime.profile != "hosted":
-            repo_config = replace(
+            return replace(
                 repo_config,
                 runtime=replace(repo_config.runtime, profile="hosted"),
             )
+        return repo_config
+
+    def _build_lifecycle(
+        self,
+        job: Job,
+        repository: Path,
+        repo_config: RepoConfig,
+    ) -> RunLifecycle:
         unauthorized_grants = {
             tool: sorted(secrets - self.allowed_tool_secret_grants.get(tool, frozenset()))
             for tool, secrets in repo_config.tools.secret_access.items()
@@ -135,6 +156,25 @@ class JobRunner:
             raise ValueError(
                 "hosted repository requested unapproved tool secret grants: " + details
             )
+        executor = (
+            self.executor_factory(repository, repo_config, job.id)
+            if self.executor_factory is not None
+            else None
+        )
+        return RunLifecycle.for_repository(
+            repository,
+            repo_config,
+            run_id=job.id,
+            executor=executor,
+        )
+
+    def _run_agent(
+        self,
+        job: Job,
+        layout: JobWorkspace,
+        repo_config: RepoConfig,
+        executor: CommandExecutor,
+    ) -> AgentResult:
         max_steps = job.run_spec.max_steps or repo_config.runtime.max_steps
         runtime = RuntimeConfig(
             workspace=layout.repository,
@@ -150,6 +190,7 @@ class JobRunner:
             ),
             repo_config=repo_config,
             trusted_model_paths_only=self.hosted_mode,
+            executor=executor,
         )
         loaded = self.model_loader(runtime)
         sessions = SessionStore(layout.sessions)
@@ -165,7 +206,7 @@ class JobRunner:
             loaded_plugins=loaded,
             on_event=lambda message: self._on_agent_event(job, message),
         )
-        return coordinator.run(session, sessions), repo_config
+        return coordinator.run(session, sessions)
 
     def _apply_result(
         self,
@@ -173,6 +214,7 @@ class JobRunner:
         result: AgentResult,
         repository: Path,
         repo_config: RepoConfig,
+        executor: CommandExecutor,
     ) -> None:
         job.result_summary = self.credentials.redact(result.final_message)
         outcome = result.outcome_kind
@@ -206,7 +248,9 @@ class JobRunner:
         transition_job(job, JobStatus.PUBLISHING)
         self.store.save(job)
         self._heartbeat(job)
-        job.publication = dict(self.publisher.publish(job, repository, repo_config))
+        job.publication = dict(
+            self.publisher.publish(job, repository, repo_config, executor=executor)
+        )
         transition_job(job, JobStatus.COMPLETED)
         self.store.save(job)
 

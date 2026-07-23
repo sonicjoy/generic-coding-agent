@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from gca.executor.fake import FakeExecutor
 from gca.integrations.scm import ChangeRequest, PublicationController, PublicationError
 from gca.jobs.models import Job, PublicationTarget, RepositorySpec, RunSpec
 from gca.repo_config import load_repo_config
@@ -80,6 +81,10 @@ def _job(repository: Path) -> Job:
     )
 
 
+def _executor() -> FakeExecutor:
+    return FakeExecutor(execute_locally=True)
+
+
 def test_controller_checks_commits_pushes_and_opens_change_request(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     source = repository / "src"
@@ -91,6 +96,7 @@ def test_controller_checks_commits_pushes_and_opens_change_request(tmp_path: Pat
         _job(repository),
         repository,
         load_repo_config(repository),
+        executor=_executor(),
     )
 
     assert result["change_request_url"] == "https://scm.example/change/1"
@@ -108,6 +114,7 @@ def test_controller_skips_empty_change_request(tmp_path: Path) -> None:
         _job(repository),
         repository,
         load_repo_config(repository),
+        executor=_executor(),
     )
 
     assert result["no_changes"] is True
@@ -124,6 +131,7 @@ def test_controller_rejects_disallowed_paths(tmp_path: Path) -> None:
             _job(repository),
             repository,
             load_repo_config(repository),
+            executor=_executor(),
         )
 
 
@@ -151,6 +159,7 @@ publication:
             _job(repository),
             repository,
             snapshot,
+            executor=_executor(),
         )
 
     assert not (repository / "owned.txt").exists()
@@ -188,4 +197,5 @@ publication:
             _job(repository),
             repository,
             load_repo_config(repository),
+            executor=_executor(),
         )

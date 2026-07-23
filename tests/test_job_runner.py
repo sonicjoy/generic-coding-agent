@@ -4,6 +4,7 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+from gca.executor.fake import FakeExecutor
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
 from gca.jobs.queue import SqliteJobQueue
 from gca.jobs.runner import JobRunner
@@ -12,6 +13,16 @@ from gca.models import ModelProfile
 from gca.plugins import LoadedPlugins
 from gca.providers.base import ProviderError
 from gca.providers.scripted import ScriptedProvider
+from gca.repo_config import RepoConfig
+
+
+def fake_executor_factory(
+    workspace: Path,
+    repo_config: RepoConfig,
+    run_id: str,
+) -> FakeExecutor:
+    _ = workspace, repo_config, run_id
+    return FakeExecutor(execute_locally=True)
 
 
 def _source_repository(tmp_path: Path) -> Path:
@@ -75,6 +86,7 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         model_loader=load_models,
         allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
     )
 
     result = runner.execute(claimed)
@@ -82,7 +94,8 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
     assert result.status == JobStatus.COMPLETED, result.last_error
     assert result.session_id is not None
     assert result.workspace_path is not None
-    assert (Path(result.workspace_path) / "generated.txt").read_text(encoding="utf-8") == "done\n"
+    # Terminal jobs wipe the ephemeral workspace after cleanup.
+    assert not Path(result.workspace_path).exists()
     assert store.load(result.id).status == JobStatus.COMPLETED
 
 
@@ -132,6 +145,7 @@ def test_job_runner_resumes_paused_session(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         model_loader=load_models,
         allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
     )
     paused = runner.execute(claimed)
     assert paused.status == JobStatus.PAUSED, paused.last_error
@@ -171,6 +185,7 @@ def test_job_runner_requeues_retryable_provider_failure(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         model_loader=fail_models,
         allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
     ).execute(claimed)
 
     assert result.status == JobStatus.QUEUED
@@ -219,6 +234,7 @@ tools:
         workspace_root=tmp_path / "workspaces",
         model_loader=lambda config: LoadedPlugins(),
         allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
     ).execute(claimed)
 
     assert result.status == JobStatus.FAILED

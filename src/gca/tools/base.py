@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from gca.credentials import CredentialBroker
+from gca.executor.protocol import CommandExecutor
 from gca.providers.base import ToolSpec
 
 
@@ -48,6 +49,7 @@ class ToolContext:
     current_tool: str = ""
     execution: ExecutionPolicy = field(default_factory=ExecutionPolicy)
     credentials: CredentialBroker = field(default_factory=CredentialBroker.from_environment)
+    executor: CommandExecutor | None = None
 
     def resolve(self, relative: str) -> Path:
         """Resolve ``relative`` under the workspace, rejecting path escapes."""

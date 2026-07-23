@@ -6,6 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def normalize_run_id(value: str) -> str:
+    """Normalize a session or job id into a hex workspace directory name."""
+
+    cleaned = "".join(character for character in value.lower() if character in "0123456789abcdef")
+    if not cleaned:
+        raise ValueError("run id must contain hexadecimal characters")
+    return cleaned
+
+
 @dataclass(frozen=True)
 class JobWorkspace:
     """Paths allocated to one hosted job."""
@@ -28,10 +37,9 @@ class JobWorkspace:
     def under(cls, workspace_root: Path, job_id: str) -> JobWorkspace:
         """Build a confined layout for a hex job identifier."""
 
-        if not job_id or any(character not in "0123456789abcdef" for character in job_id.lower()):
-            raise ValueError("job_id must contain only hexadecimal characters")
+        normalized = normalize_run_id(job_id)
         root = Path(workspace_root).resolve()
-        target = (root / job_id).resolve()
+        target = (root / normalized).resolve()
         if root not in target.parents:
             raise ValueError("job workspace escapes configured root")
         return cls(root=target)

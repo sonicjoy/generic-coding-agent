@@ -109,6 +109,37 @@ def test_cli_validate_uses_manifest_without_model_call(tmp_path: Path, capsys: o
     assert "configuration valid" in capsys.readouterr().out  # type: ignore[attr-defined]
 
 
+def test_cli_validate_does_not_prepare_docker_executor(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    gca_dir = tmp_path / ".gca"
+    gca_dir.mkdir()
+    (gca_dir / "config.yaml").write_text("version: 1\n", encoding="utf-8")
+    script = tmp_path / "script.json"
+    script.write_text("[]", encoding="utf-8")
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("DockerExecutor.create should not run during validate")
+
+    monkeypatch.setattr("gca.executor.docker.DockerExecutor.create", boom)  # type: ignore[attr-defined]
+    monkeypatch.setattr("gca.executor.lifecycle.DockerExecutor.create", boom)  # type: ignore[attr-defined]
+    monkeypatch.setattr("gca.runtime.DockerExecutor.create", boom)  # type: ignore[attr-defined]
+
+    assert (
+        main(
+            [
+                "validate",
+                "--workspace",
+                str(tmp_path),
+                "--script",
+                str(script),
+            ]
+        )
+        == 0
+    )
+
+
 def test_cli_job_run_clones_local_repository(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

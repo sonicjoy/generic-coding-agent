@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from gca.agent import Agent, AgentConfig, EventHook
 from gca.context import build_context_prompt
 from gca.credentials import CredentialBroker
+from gca.executor.docker import DockerExecutor
+from gca.executor.protocol import CommandExecutor
 from gca.models import ModelRegistry
 from gca.orchestrator import RunCoordinator
 from gca.personas import PersonaSet, load_personas
@@ -23,6 +26,7 @@ from gca.tool_policy import (
 )
 from gca.tools import build_registry
 from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
+from gca.workspace.layout import normalize_run_id
 
 DEFAULT_SYSTEM_PROMPT = """\
 You are a generic coding agent operating autonomously inside a project workspace.
@@ -52,6 +56,8 @@ class RuntimeConfig:
     models_paths: list[Path] | None = None
     repo_config: RepoConfig | None = None
     trusted_model_paths_only: bool = False
+    executor: CommandExecutor | None = None
+    prepare_executor: bool = True
 
 
 def default_skill_dirs(workspace: Path) -> list[Path]:
@@ -154,12 +160,14 @@ def create_agent(
     credentials = CredentialBroker.from_environment(
         include_names=_configured_secret_names(repo_config)
     )
+    executor = _ensure_executor(config, repo_config, session.id)
     context = ToolContext(
         workspace=config.workspace,
         allowed_tools=allowed,
         tool_secret_access=repo_config.tools.secret_access,
         execution=_execution_policy(repo_config),
         credentials=credentials,
+        executor=executor,
     )
     return Agent(
         provider=provider,
@@ -190,6 +198,7 @@ def create_coordinator(
     skills = SkillRegistry.discover(skill_dirs)
     registry = build_registry_with_extras(config, skills, loaded_plugins)
     personas = load_personas(repo_config.context.persona_file, repo_config.context.phase_personas)
+    executor = _ensure_executor(config, repo_config, "coordinator")
     return RunCoordinator(
         workspace=config.workspace,
         max_steps=config.max_steps,
@@ -206,7 +215,31 @@ def create_coordinator(
             include_names=_configured_secret_names(repo_config)
         ),
         on_event=on_event,
+        executor=executor,
     )
+
+
+def _ensure_executor(
+    config: RuntimeConfig,
+    repo_config: RepoConfig,
+    run_id: str,
+) -> CommandExecutor | None:
+    if config.executor is not None:
+        return config.executor
+    if not config.prepare_executor:
+        return None
+    try:
+        identity = normalize_run_id(run_id)
+    except ValueError:
+        identity = uuid4().hex
+    executor = DockerExecutor.create(
+        config.workspace,
+        repo_config.environment,
+        run_id=identity,
+    )
+    if isinstance(executor, DockerExecutor):
+        executor.build()
+    return executor
 
 
 def _execution_policy(config: RepoConfig) -> ExecutionPolicy:

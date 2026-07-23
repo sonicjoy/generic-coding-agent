@@ -40,6 +40,9 @@ or the step budget is exhausted.
 - **Sessions**: create / list / resume, persisted as JSON.
 - **Portable repository manifests**: strict `.gca/config.yaml` validation for
   personas, skills, routing, fixed commands, tool permissions, and limits.
+- **Containerized command execution**: every `run_command` / fixed command runs
+  inside a Docker isolation image (repo `Dockerfile.agent` when present, else a
+  packaged default). Docker Engine is required for real agent runs.
 - **Durable hosted jobs**: idempotent SQLite jobs, isolated clones, leases,
   retries, resume, and service-owned GitHub/GitLab publication.
 - **Durable GitLab issue sessions**: one aggregate per issue with webhook
@@ -49,14 +52,26 @@ or the step budget is exhausted.
 
 ## Install (development)
 
+**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), and
+**Docker Engine** (daemon reachable via `docker info`) for real agent runs.
+Unit tests use a fake executor and do not need Docker.
+
+```bash
+# Install uv if needed: https://docs.astral.sh/uv/getting-started/installation/
+uv sync --extra dev
+source .venv/bin/activate
+```
+
+Alternatively with pip:
+
 ```bash
 python -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-For day-to-day use against other repos, ``pip install -e .`` (without ``[dev]``)
-is enough.
+For day-to-day use against other repos, ``uv sync --extra service`` (or
+``pip install -e ".[service]"``) is enough.
 
 ## Quick start in your project
 
@@ -71,10 +86,10 @@ Ready-to-copy templates under ``examples/templates/`` include `AGENTS.md`,
 
 ```bash
 cd /path/to/generic-coding-agent
-python -m venv .venv
-. .venv/bin/activate
-pip install -e .
+uv sync
+source .venv/bin/activate
 gca --help
+docker info   # must succeed for real agent command execution
 ```
 
 Keep this environment activated (or install into a tooling venv on your `PATH`).
@@ -260,9 +275,10 @@ Manifest paths are repository-relative and cannot escape the workspace.
 Frontmatter remains backward-compatible but is stripped from model-facing
 instructions by default.
 
-Fixed commands use `subprocess` argv with `shell=False`; optional parameters
-must declare bounded types/choices in the manifest. Global deny and phase allow
-rules are enforced by the tool registry, not only by prompts.
+Fixed commands run a fixed argv inside the isolation container (no shell);
+optional parameters must declare bounded types/choices in the manifest. Global
+deny and phase allow rules are enforced by the tool registry, not only by
+prompts.
 
 ## Provider configuration
 
@@ -531,10 +547,41 @@ export GCA_TOOL_SECRET_GRANTS='{
 }'
 ```
 
-The built-in controls are not an OS sandbox: deploy workers in isolated
-containers with filesystem, resource, and network-egress limits. Monitoring /
-anomaly detection stays outside core and can create an SCM issue or call
-`POST /runs`.
+The built-in controls isolate **target-repo commands** in Docker containers
+(with CPU/memory limits and workspace bind mounts). Deploy the GCA worker with
+access to a Docker Engine (typically by mounting `/var/run/docker.sock`).
+Monitoring / anomaly detection stays outside core and can create an SCM issue
+or call `POST /runs`. The worker's retention janitor also prunes stale per-run
+isolation images (`gca/<run-id>:run`) after the workspace retention window; the
+shared `gca/default-isolation` image is kept.
+
+### Deploy GCA on AWS / GCP (Docker)
+
+Build and push the worker image (uses **uv** in a multi-stage `Dockerfile`):
+
+```bash
+docker build -t gca:latest .
+# tag/push to ECR, GCR, or Artifact Registry as needed
+```
+
+Local / cloud-like bring-up with Compose (API + worker, shared data volume,
+Docker socket for nested isolation runs):
+
+```bash
+cp examples/service.env.example .env   # set GCA_* tokens
+docker compose up --build
+```
+
+On a VM or container host, run the worker with:
+
+- `GCA_DATA_DIR` on durable storage
+- `/var/run/docker.sock` mounted read/write so the worker can `docker build` /
+  `docker run` per-session isolation containers
+- Org-scoped `GCA_GITHUB_TOKEN` or `GCA_GITLAB_TOKEN` (one token per tenant deploy)
+
+Target repos may optionally add `Dockerfile.agent` (or `environment.dockerfile`
+in `.gca/config.yaml` / `agent/config.yaml`) for dependency parity. Without it,
+GCA uses a packaged default isolation image (sandbox only).
 
 ## Usage
 
@@ -553,12 +600,13 @@ gca run "Create hello.py" --script examples/demo_script.json --plugins examples/
 ## Development
 
 ```bash
-pip install -e ".[dev,service]"
+uv sync --extra dev --extra service
 ruff check .          # lint
 ruff format --check . # format check
 mypy                  # type check
-pytest                # unit + offline evals
+pytest                # unit tests + offline evals (no Docker required)
 pytest -m eval        # evaluation scenarios only
+pytest -m docker      # optional Docker Engine smoke tests
 ```
 
 Offline eval scenarios live under ``evals/scenarios/`` and are driven by
@@ -585,10 +633,13 @@ src/gca/
   plugins.py     dynamic plugin loading
   jobs/          durable job lifecycle, SQLite store/queue, runner
   workspace/     isolated repository preparation
+  executor/      Docker isolation executor, default image, run lifecycle
   integrations/  webhook and SCM adapter contracts/implementations
   providers/     LLMProvider, OpenAI-compatible, ScriptedProvider
   tools/         built-in and fixed-command tools
 src/gca_service/ optional ASGI API and worker
+Dockerfile       uv-based worker/API image
+compose.yaml     local/cloud-like API+worker with docker.sock
 examples/        copy-ready config/persona/skill/model templates
 evals/           offline deterministic evaluation scenarios
 tests/           pytest suite

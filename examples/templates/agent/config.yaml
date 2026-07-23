@@ -1,0 +1,9 @@
+# Optional agent environment overrides (merged over .gca/config.yaml).
+# Omit dockerfile to use GCA's default isolation image.
+environment:
+  working_dir: /workspace
+  cpu: 2
+  memory: 4g
+  network: false
+  default_timeout: 300
+  remove_image_after_run: false

@@ -1,4 +1,4 @@
-"""Path-confined retention cleanup for workspaces and structured logs."""
+"""Path-confined retention cleanup for workspaces, logs, and isolation images."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from gca.executor.prune import prune_stale_run_images
 from gca.issue_sessions.models import GenerationStatus, TurnStatus
 from gca.issue_sessions.store import IssueSessionStore
 
 
 class RetentionJanitor:
-    """Delete expired turn workspaces and old structured events."""
+    """Delete expired turn workspaces, old structured events, and stale images."""
 
     def __init__(
         self,
@@ -21,20 +22,28 @@ class RetentionJanitor:
         workspace_root: Path,
         workspace_retention_seconds: int = 86400,
         log_retention_seconds: int = 2_592_000,
+        image_retention_seconds: int | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
         self.workspace_retention_seconds = workspace_retention_seconds
         self.log_retention_seconds = log_retention_seconds
+        self.image_retention_seconds = (
+            workspace_retention_seconds
+            if image_retention_seconds is None
+            else image_retention_seconds
+        )
 
     def run(self) -> dict[str, int]:
         """Execute one cleanup pass."""
 
         deleted_workspaces = self.cleanup_workspaces()
         deleted_events = self.cleanup_events()
+        deleted_images = self.cleanup_images()
         return {
             "deleted_workspaces": deleted_workspaces,
             "deleted_events": deleted_events,
+            "deleted_images": deleted_images,
         }
 
     def cleanup_events(self) -> int:
@@ -59,6 +68,12 @@ class RetentionJanitor:
             shutil.rmtree(resolved)
             deleted += 1
         return deleted
+
+    def cleanup_images(self) -> int:
+        """Remove stale per-run ``gca/<id>:run`` isolation images."""
+
+        result = prune_stale_run_images(older_than_seconds=self.image_retention_seconds)
+        return result.deleted
 
     def _is_deletable(self, path: Path, now: datetime) -> bool:
         marker = path / "retention.json"

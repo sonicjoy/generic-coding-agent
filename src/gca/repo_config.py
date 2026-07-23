@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from gca.context import discover_context_files
+from gca.executor.spec import EnvironmentSpec, EnvironmentSpecError
 from gca.frontmatter import FrontmatterError, split_frontmatter
 from gca.paths import WorkspacePathError, resolve_workspace_path
 from gca.routing import RoutingPolicy
@@ -105,6 +106,7 @@ class RepoConfig:
     routing: RoutingPolicy = field(default_factory=RoutingPolicy)
     model_paths: tuple[Path, ...] = ()
     publication: dict[str, Any] = field(default_factory=dict)
+    environment: EnvironmentSpec = field(default_factory=EnvironmentSpec)
 
     def fingerprint(self) -> str:
         """Return a stable hash used for resume diagnostics."""
@@ -157,6 +159,7 @@ class RepoConfig:
             "routing": self.routing.fingerprint(),
             "model_paths": [_relative(self.workspace, path) for path in self.model_paths],
             "publication": self.publication,
+            "environment": self.environment.__dict__,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         return hashlib.sha256(encoded).hexdigest()
@@ -165,7 +168,12 @@ class RepoConfig:
 def default_repo_config_paths(workspace: Path) -> list[Path]:
     """Return user and repository manifest paths in precedence order."""
 
-    return [Path.home() / ".gca" / "config.yaml", Path(workspace).resolve() / ".gca/config.yaml"]
+    root = Path(workspace).resolve()
+    return [
+        Path.home() / ".gca" / "config.yaml",
+        root / ".gca" / "config.yaml",
+        root / "agent" / "config.yaml",
+    ]
 
 
 def load_repo_config(workspace: Path, paths: list[Path] | None = None) -> RepoConfig:
@@ -182,6 +190,7 @@ def load_repo_config(workspace: Path, paths: list[Path] | None = None) -> RepoCo
     filenames = _context_filenames(context_raw.get("files", list(CONTEXT_FILENAMES)))
     routing_raw = _mapping(merged.get("routing", {}), "routing")
     publication_raw = _mapping(merged.get("publication", {}), "publication")
+    environment_raw = _mapping(merged.get("environment", {}), "environment")
     for context_file in discover_context_files(root, filenames=filenames):
         try:
             metadata, _ = split_frontmatter(context_file.content, source=context_file.path)
@@ -194,6 +203,7 @@ def load_repo_config(workspace: Path, paths: list[Path] | None = None) -> RepoCo
             raise RepoConfigError(f"'gca' frontmatter in {context_file.path} must be a mapping")
         gca_data = dict(gca)
         publication = gca_data.pop("publication", None)
+        environment = gca_data.pop("environment", None)
         routing_raw = _deep_merge(routing_raw, gca_data)
         # Only the repository root AGENTS.md/CLAUDE.md may contribute publication policy.
         if (
@@ -206,8 +216,19 @@ def load_repo_config(workspace: Path, paths: list[Path] | None = None) -> RepoCo
                     f"'gca.publication' frontmatter in {context_file.path} must be a mapping"
                 )
             publication_raw = _deep_merge(publication_raw, dict(publication))
+        if (
+            environment is not None
+            and Path(context_file.path).resolve().parent == root
+            and Path(context_file.path).name in {"AGENTS.md", "CLAUDE.md"}
+        ):
+            if not isinstance(environment, Mapping):
+                raise RepoConfigError(
+                    f"'gca.environment' frontmatter in {context_file.path} must be a mapping"
+                )
+            environment_raw = _deep_merge(environment_raw, dict(environment))
     merged["routing"] = routing_raw
     merged["publication"] = publication_raw
+    merged["environment"] = environment_raw
     return _parse(root, merged)
 
 
@@ -221,6 +242,9 @@ def _load_file(path: Path) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise RepoConfigError(f"{path} must contain a mapping")
     raw = dict(value)
+    # agent/config.yaml may contain only an environment block without version.
+    if path.name == "config.yaml" and path.parent.name == "agent" and "version" not in raw:
+        return raw
     if raw.get("version") != CONFIG_VERSION:
         raise RepoConfigError(f"{path} must declare version: {CONFIG_VERSION}")
     return raw
@@ -237,6 +261,7 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
         "routing",
         "models",
         "publication",
+        "environment",
     }
     _reject_unknown(raw, allowed, "repository configuration")
     version = raw.get("version", CONFIG_VERSION)
@@ -269,6 +294,12 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
         raise RepoConfigError(str(exc)) from exc
 
     publication = _parse_publication(_mapping(raw.get("publication", {}), "publication"))
+    try:
+        environment = EnvironmentSpec.from_mapping(
+            _mapping(raw.get("environment", {}), "environment")
+        )
+    except EnvironmentSpecError as exc:
+        raise RepoConfigError(str(exc)) from exc
     return RepoConfig(
         workspace=workspace,
         version=version,
@@ -280,6 +311,7 @@ def _parse(workspace: Path, raw: dict[str, Any]) -> RepoConfig:
         routing=routing,
         model_paths=model_paths,
         publication=publication,
+        environment=environment,
     )
 
 
