@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from gca.providers.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
+from gca.usage import LLMUsage
 
 
 class ScriptedProvider(LLMProvider):
@@ -85,5 +86,26 @@ class ScriptedProvider(LLMProvider):
                 )
                 for j, tc in enumerate(entry.get("tool_calls", []))
             ]
-            steps.append(LLMResponse(content=str(entry.get("content", "")), tool_calls=tool_calls))
+            usage = None
+            raw_usage = entry.get("usage")
+            if isinstance(raw_usage, dict):
+                usage = LLMUsage(
+                    prompt_tokens=int(raw_usage.get("prompt_tokens", 0) or 0),
+                    completion_tokens=int(raw_usage.get("completion_tokens", 0) or 0),
+                    total_tokens=int(raw_usage.get("total_tokens", 0) or 0),
+                    cost_usd=(
+                        float(raw_usage["cost_usd"])
+                        if raw_usage.get("cost_usd") is not None
+                        else None
+                    ),
+                    model=str(raw_usage.get("model", "")),
+                    generation_id=str(raw_usage.get("generation_id", "")),
+                )
+            steps.append(
+                LLMResponse(
+                    content=str(entry.get("content", "")),
+                    tool_calls=tool_calls,
+                    usage=usage,
+                )
+            )
         return cls(steps, final_text=final_text)

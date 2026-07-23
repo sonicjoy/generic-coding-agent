@@ -24,6 +24,7 @@ from gca.providers.base import (
     ToolSpec,
 )
 from gca.providers.tool_arguments import parse_tool_arguments
+from gca.usage import LLMUsage
 
 _MAX_RESPONSE_BYTES = 10_000_000
 
@@ -107,8 +108,12 @@ class OpenAICompatibleProvider(LLMProvider):
             headers=headers,
             method="POST",
         )
+        response_headers: dict[str, str] = {}
         try:
             with _open_url(request, self.timeout) as response:
+                response_headers = {
+                    str(key).lower(): str(value) for key, value in response.headers.items()
+                }
                 raw = response.read(_MAX_RESPONSE_BYTES + 1)
                 if len(raw) > _MAX_RESPONSE_BYTES:
                     raise ProviderError("LLM response exceeded 10 MB")
@@ -144,7 +149,48 @@ class OpenAICompatibleProvider(LLMProvider):
                     arguments=parse_tool_arguments(function.get("arguments") or {}),
                 )
             )
-        return LLMResponse(content=content, tool_calls=tool_calls)
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            usage=_usage_from_response(data, response_headers, model_id=self.model_id),
+        )
+
+
+def _usage_from_response(
+    data: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    model_id: str,
+) -> LLMUsage | None:
+    usage_raw = data.get("usage")
+    cost_header = headers.get("x-openrouter-cost")
+    generation_id = (
+        headers.get("x-openrouter-generation-id")
+        or headers.get("x-openrouter-id")
+        or ""
+    )
+    if not isinstance(usage_raw, dict) and not cost_header and not generation_id:
+        return None
+    usage_raw = usage_raw if isinstance(usage_raw, dict) else {}
+    prompt = int(usage_raw.get("prompt_tokens") or 0)
+    completion = int(usage_raw.get("completion_tokens") or 0)
+    total = int(usage_raw.get("total_tokens") or (prompt + completion))
+    cost: float | None = None
+    if cost_header:
+        try:
+            cost = float(cost_header)
+        except ValueError:
+            cost = None
+    if prompt == 0 and completion == 0 and total == 0 and cost is None and not generation_id:
+        return None
+    return LLMUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total,
+        cost_usd=cost,
+        model=model_id,
+        generation_id=str(generation_id),
+    )
 
 
 def _normalize_content(content: object) -> str:

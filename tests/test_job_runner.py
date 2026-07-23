@@ -88,7 +88,14 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
                         "name": "create_file",
                         "arguments": {"path": "generated.txt", "content": "done\n"},
                     }
-                ]
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 1,
+                    "total_tokens": 4,
+                    "cost_usd": 0.001,
+                    "model": "scripted",
+                },
             },
             {
                 "tool_calls": [
@@ -96,7 +103,14 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
                         "name": "finish",
                         "arguments": {"summary": "Generated the requested file."},
                     }
-                ]
+                ],
+                "usage": {
+                    "prompt_tokens": 2,
+                    "completion_tokens": 1,
+                    "total_tokens": 3,
+                    "cost_usd": 0.002,
+                    "model": "scripted",
+                },
             },
         ]
     )
@@ -122,6 +136,10 @@ def test_job_runner_clones_runs_and_persists_session(tmp_path: Path) -> None:
     # Terminal jobs wipe the ephemeral workspace after cleanup.
     assert not Path(result.workspace_path).exists()
     assert store.load(result.id).status == JobStatus.COMPLETED
+    assert result.llm_usage["prompt_tokens"] == 5
+    assert result.llm_usage["completion_tokens"] == 2
+    assert result.llm_usage["cost_usd"] == 0.003
+    assert store.load(result.id).llm_usage["prompt_tokens"] == 5
 
 
 def test_job_runner_resumes_paused_session(tmp_path: Path) -> None:

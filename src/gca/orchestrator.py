@@ -28,6 +28,7 @@ from gca.session import (
 from gca.tool_policy import registry_for_phase
 from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
 from gca.tools.control import FINISH_TOOL_NAME
+from gca.usage import empty_usage_dict, merge_totals, totals_from_dict
 from gca.workflows import (
     SubmitPlanTool,
     SubmitReviewTool,
@@ -77,6 +78,13 @@ class _PhaseStore:
         if workflow is not None:
             workflow.provider_states[self.model_name] = dict(child.provider_state)
         self.parent.step_count = sum(run.step_count for run in self.parent.agent_runs)
+        self.parent.llm_usage = merge_totals(
+            totals_from_dict(self.parent.llm_usage),
+            totals_from_dict(child.llm_usage),
+        ).to_dict()
+        # Child sessions are ephemeral per save; clear so the next persist does not
+        # double-count tokens already rolled into the parent.
+        child.llm_usage = empty_usage_dict()
         self.store.save(self.parent)
 
 
