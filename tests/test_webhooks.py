@@ -176,6 +176,61 @@ def test_github_pull_request_review_approved_without_agent_fix_is_ignored() -> N
     assert GitHubWebhookNormalizer().normalize(context) is None
 
 
+def test_github_merged_pull_request_is_parsed_for_cleanup() -> None:
+    context = _github_context(
+        "pull_request",
+        {
+            "action": "closed",
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "pull_request": {
+                "number": 46,
+                "merged": True,
+                "html_url": "https://github.com/owner/repo/pull/46",
+                "head": {"ref": "gca/cdaf54d9fb2a"},
+            },
+        },
+    )
+    merged = GitHubWebhookNormalizer().parse_merged_pull_request(
+        context, allowed_projects=frozenset({"owner/repo"})
+    )
+    assert merged is not None
+    assert merged.number == "46"
+    assert merged.head_ref == "gca/cdaf54d9fb2a"
+    assert merged.url.endswith("/pull/46")
+    # Merge is lifecycle cleanup, not a new run.
+    assert GitHubWebhookNormalizer().normalize(context) is None
+
+
+def test_github_closed_unmerged_pull_request_is_ignored() -> None:
+    context = _github_context(
+        "pull_request",
+        {
+            "action": "closed",
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "pull_request": {
+                "number": 46,
+                "merged": False,
+                "html_url": "https://github.com/owner/repo/pull/46",
+                "head": {"ref": "gca/cdaf54d9fb2a"},
+            },
+        },
+    )
+    assert (
+        GitHubWebhookNormalizer().parse_merged_pull_request(
+            context, allowed_projects=frozenset({"owner/repo"})
+        )
+        is None
+    )
+
+
 def test_gitlab_issue_webhook_verifies_and_normalizes() -> None:
     body = json.dumps(
         {

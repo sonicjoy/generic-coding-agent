@@ -118,6 +118,80 @@ def test_github_webhook_is_verified_and_deduplicated(tmp_path: Path) -> None:
     assert client.post("/webhooks/github", content=body, headers=forged_headers).status_code == 401
 
 
+def test_github_merged_pull_request_webhook_cleans_up_job(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    state = ServiceState.build(settings)
+    job = state.store.create(
+        RunSpec(
+            task="Follow up",
+            repository=RepositorySpec(
+                url="https://github.com/owner/repo.git",
+                ref="gca/head",
+            ),
+            labels={"pr_id": "46", "head_ref": "gca/head", "provider": "github"},
+        )
+    )
+    state.queue.enqueue(job.id)
+    claimed = state.queue.claim(settings.worker_id)
+    assert claimed is not None
+    transition_job(claimed, JobStatus.PAUSED, error="waiting")
+    workspace = settings.workspace_root / claimed.id
+    (workspace / "sessions").mkdir(parents=True)
+    (workspace / "repo").mkdir(parents=True)
+    (workspace / "sessions" / "s.json").write_text("{}", encoding="utf-8")
+    claimed.workspace_path = str(workspace / "repo")
+    claimed.publication = {
+        "change_request_url": "https://github.com/owner/repo/pull/46",
+    }
+    state.store.save(claimed)
+
+    client = TestClient(create_app(settings))
+    body = json.dumps(
+        {
+            "action": "closed",
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "pull_request": {
+                "number": 46,
+                "merged": True,
+                "html_url": "https://github.com/owner/repo/pull/46",
+                "head": {"ref": "gca/head"},
+            },
+        }
+    ).encode()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret-123456",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    response = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-pr-merged",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "merged_pull_request_cleanup"
+    assert claimed.id in payload["cancelled_job_ids"]
+    assert claimed.id in payload["wiped_workspaces"]
+    reloaded = ServiceState.build(settings).store.load(claimed.id)
+    assert reloaded.status == JobStatus.CANCELLED
+    assert reloaded.workspace_path is None
+    assert not workspace.exists()
+
+
 def test_github_pull_request_review_webhook_enqueues_run(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     client = TestClient(create_app(settings))

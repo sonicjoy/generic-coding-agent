@@ -530,6 +530,12 @@ Those runs clone the PR **head** ref and publish against the PR **base** ref
 (fetching the base when a shallow single-branch clone omitted it). Ordinary
 approval/comment chatter does not enqueue; use Request changes or `/agent fix`.
 
+Subscribe the webhook to **Pull requests** as well. When GitHub delivers
+`pull_request` with `action=closed` and `merged=true`, the service cancels any
+still-active jobs linked to that PR (`pr_id` / publication URL / head ref) and
+wipes their workspaces/sessions. The worker process stays running for other
+jobs; only the matched job sessions are closed.
+
 Webhook and `POST /runs` submissions may omit `max_steps`. Set
 `GCA_DEFAULT_MAX_STEPS` (1..1000) on the service to apply a default budget to
 those jobs. Explicit `max_steps` on `/runs` (or resume) still wins. When neither

@@ -7,11 +7,13 @@ import hashlib
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from gca.integrations.github import GitHubWebhookNormalizer
 from gca.integrations.webhooks import (
     WebhookContext,
     WebhookPayloadError,
     WebhookVerificationError,
 )
+from gca.jobs.merge_cleanup import cleanup_jobs_for_merged_change_request
 from gca.jobs.models import JobStatus
 from gca.jobs.store import IdempotencyConflictError
 from gca.workspace.prepare import WorkspaceError, validate_repository_spec
@@ -67,6 +69,28 @@ async def receive_webhook(request: Request) -> Response:
     try:
         normalizer.verify(context, secret)
         normalizer.delivery_id(context)
+        if isinstance(normalizer, GitHubWebhookNormalizer):
+            merged = normalizer.parse_merged_pull_request(
+                context, allowed_projects=allowed_projects
+            )
+            if merged is not None:
+                result = cleanup_jobs_for_merged_change_request(
+                    state.store,
+                    merged,
+                    workspace_root=state.settings.workspace_root,
+                )
+                return JSONResponse(
+                    {
+                        "action": "merged_pull_request_cleanup",
+                        "provider": merged.provider,
+                        "project": merged.project,
+                        "number": merged.number,
+                        "matched_job_ids": list(result.matched_job_ids),
+                        "cancelled_job_ids": list(result.cancelled_job_ids),
+                        "wiped_workspaces": list(result.wiped_workspaces),
+                    },
+                    status_code=200,
+                )
         spec = normalizer.normalize(context, allowed_projects=allowed_projects)
         if spec is None:
             return Response(status_code=204)
