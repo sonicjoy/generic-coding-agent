@@ -42,6 +42,8 @@ or the step budget is exhausted.
   personas, skills, routing, fixed commands, tool permissions, and limits.
 - **Durable hosted jobs**: idempotent SQLite jobs, isolated clones, leases,
   retries, resume, and service-owned GitHub/GitLab publication.
+- **Durable GitLab issue sessions**: one aggregate per issue with webhook
+  commands, clarification, MR remediation, two-key auto-merge, and redacted logs.
 - **Optional API/worker service**: authenticated runs and verified SCM webhooks
   without adding HTTP dependencies to the default installation.
 
@@ -422,8 +424,44 @@ The API exposes:
   `Idempotency-Key`.
 - `GET /runs/{id}`, `POST /runs/{id}/cancel`, and
   `POST /runs/{id}/resume` with a larger `max_steps` budget.
-- `POST /webhooks/github` and `POST /webhooks/gitlab`.
+- `POST /webhooks/github` and legacy `POST /webhooks/gitlab`.
+- `POST /webhooks/gitlab/{registration_id}` — preferred GitLab Issue Agent
+  ingress (Issue, Note, Merge Request, and Pipeline events).
+- `POST /issue-sessions`, `GET /issue-sessions`, `GET /issue-sessions/{id}`,
+  `GET /issue-sessions/{id}/events`, `GET /issue-sessions/{id}/transcript`,
+  `POST /issue-sessions/{id}/cancel`, and `POST /issue-sessions/{id}/retry`.
 - `GET /health` and `GET /ready`.
+
+### Durable GitLab Issue Agent
+
+Configure one registration per GitLab project webhook in
+`GCA_GITLAB_WEBHOOK_REGISTRATIONS`, then point GitLab at
+`POST /webhooks/gitlab/{registration_id}` for Issue, Comment, Merge Request,
+and Pipeline events (not Deployment events). The handler verifies the
+registration-bound signature, stores a normalized inbound event, and returns
+`202` immediately with a delivery status (`accepted`, `duplicate`, or
+`ignored`).
+
+Product rules:
+
+- Start only when the trigger label (default `gca-run`) is applied, or when an
+  authorized actor posts an exact `/agent run` comment.
+- Exact commands: `/agent run`, `/agent fix`, `/agent cancel`, `/agent status`.
+- One durable **issue session** per `(gitlab_instance, project_id, issue_iid)`
+  owns generations and turns; this is separate from the terminal model session.
+- The model can only read/edit/test. Clone, branch, commit, push, note, MR, and
+  merge credentials stay service-owned and are never granted to tools.
+- Clarification answers continue a waiting generation; MR review comments or
+  `/agent fix` continue while awaiting merge.
+- Auto-merge is deny-wins and two-key: the operator must list the numeric
+  project in `GCA_ALLOW_AUTO_MERGE_PROJECTS`, and the trusted target-repo
+  `.gca/config.yaml` (or root `gca.publication` frontmatter) must set
+  `publication.auto_merge: true`. Nested `AGENTS.md` cannot grant merge.
+- Completion means a verified linked MR merged into the frozen target branch.
+  Target-repo CI/CD owns deploy; the service never remediates deployment jobs.
+- Retention: `GCA_WORKSPACE_RETENTION_SECONDS` (default 24h) and
+  `GCA_LOG_RETENTION_SECONDS` (default 30d). Query redacted events/transcripts
+  through the authenticated `/issue-sessions` APIs.
 
 Example run:
 
@@ -443,12 +481,15 @@ curl -X POST http://localhost:8000/runs \
 ```
 
 GitHub webhooks require `GCA_GITHUB_WEBHOOK_SECRET` and an explicit
-`GCA_ALLOWED_GITHUB_PROJECTS=owner/repo,...` allowlist. GitLab uses
-`GCA_GITLAB_WEBHOOK_SECRET` and `GCA_ALLOWED_GITLAB_PROJECTS=group/repo,...`.
+`GCA_ALLOWED_GITHUB_PROJECTS=owner/repo,...` allowlist. Prefer GitLab
+registrations JSON for issue sessions; legacy `GCA_GITLAB_WEBHOOK_SECRET` plus
+`GCA_ALLOWED_GITLAB_PROJECTS=group/repo,...` remains for single-registration
+mode and is rejected as ambiguous when multiple registrations are configured.
 The service verifies every delivery before normalization and deduplicates its
 authenticated body even if a replay uses a new delivery ID. Issues enqueue only
 when a maintainer applies the `gca-run` label; customize it with
-`GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL`.
+`GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL` (or per-registration
+`trigger_label`).
 
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
 `GCA_GITLAB_TOKEN`. These tokens also provide temporary askpass credentials for
@@ -464,6 +505,7 @@ publication:
   denied_paths: [".env", ".gca/.env"]
   max_files: 50
   max_changed_lines: 2000
+  auto_merge: false
 ```
 
 The bundled SQLite store supports a single node with multiple worker processes

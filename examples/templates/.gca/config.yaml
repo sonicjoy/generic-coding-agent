@@ -43,7 +43,8 @@ tools:
 #       timeout: 300
 #       phases: [execute, implementation, review]
 
-# Service-owned publication can require fixed checks and bound the diff:
+# Service-owned publication can require fixed checks and bound the diff.
+# Auto-merge also requires the operator ceiling GCA_ALLOW_AUTO_MERGE_PROJECTS.
 #
 # publication:
 #   required_checks: [run_tests]
@@ -51,3 +52,4 @@ tools:
 #   denied_paths: [".env", ".gca/.env"]
 #   max_files: 50
 #   max_changed_lines: 2000
+#   auto_merge: false

@@ -181,6 +181,7 @@ def load_repo_config(workspace: Path, paths: list[Path] | None = None) -> RepoCo
     context_raw = _mapping(merged.get("context", {}), "context")
     filenames = _context_filenames(context_raw.get("files", list(CONTEXT_FILENAMES)))
     routing_raw = _mapping(merged.get("routing", {}), "routing")
+    publication_raw = _mapping(merged.get("publication", {}), "publication")
     for context_file in discover_context_files(root, filenames=filenames):
         try:
             metadata, _ = split_frontmatter(context_file.content, source=context_file.path)
@@ -191,8 +192,22 @@ def load_repo_config(workspace: Path, paths: list[Path] | None = None) -> RepoCo
             continue
         if not isinstance(gca, Mapping):
             raise RepoConfigError(f"'gca' frontmatter in {context_file.path} must be a mapping")
-        routing_raw = _deep_merge(routing_raw, dict(gca))
+        gca_data = dict(gca)
+        publication = gca_data.pop("publication", None)
+        routing_raw = _deep_merge(routing_raw, gca_data)
+        # Only the repository root AGENTS.md/CLAUDE.md may contribute publication policy.
+        if (
+            publication is not None
+            and Path(context_file.path).resolve().parent == root
+            and Path(context_file.path).name in {"AGENTS.md", "CLAUDE.md"}
+        ):
+            if not isinstance(publication, Mapping):
+                raise RepoConfigError(
+                    f"'gca.publication' frontmatter in {context_file.path} must be a mapping"
+                )
+            publication_raw = _deep_merge(publication_raw, dict(publication))
     merged["routing"] = routing_raw
+    merged["publication"] = publication_raw
     return _parse(root, merged)
 
 
@@ -477,6 +492,7 @@ def _parse_publication(raw: dict[str, Any]) -> dict[str, Any]:
         "max_files",
         "max_changed_lines",
         "commit_prefix",
+        "auto_merge",
     }
     _reject_unknown(raw, allowed, "publication")
     result = dict(raw)
@@ -496,6 +512,9 @@ def _parse_publication(raw: dict[str, Any]) -> dict[str, Any]:
             result["commit_prefix"],
             "publication.commit_prefix",
         )
+    if "auto_merge" in result:
+        if not isinstance(result["auto_merge"], bool):
+            raise RepoConfigError("publication.auto_merge must be a boolean")
     return result
 
 
