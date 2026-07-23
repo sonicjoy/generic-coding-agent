@@ -180,17 +180,73 @@ def test_job_runner_requeues_retryable_provider_failure(tmp_path: Path) -> None:
     def fail_models(config: object) -> LoadedPlugins:
         raise ProviderError("rate limited", retryable=True)
 
+    events: list[str] = []
     result = JobRunner(
         store=store,
         workspace_root=tmp_path / "workspaces",
         model_loader=fail_models,
         allow_local_repositories=True,
         executor_factory=fake_executor_factory,
+        on_event=events.append,
     ).execute(claimed)
 
     assert result.status == JobStatus.QUEUED
     assert "rate limited" in result.last_error
     assert result.not_before > 0
+    assert any(
+        event.startswith(f"[job] {result.id} queued:") and "rate limited" in event
+        for event in events
+    )
+
+
+def test_job_runner_emits_paused_status_to_on_event(tmp_path: Path) -> None:
+    source = _source_repository(tmp_path)
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(
+        RunSpec(
+            task="Fix a typo",
+            repository=RepositorySpec(url=str(source), ref="main"),
+            workflow="fast",
+            max_steps=1,
+        )
+    )
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker")
+    assert claimed is not None
+    provider = ScriptedProvider.from_script(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "name": "create_file",
+                        "arguments": {"path": "paused.txt", "content": "resumable\n"},
+                    }
+                ]
+            },
+        ]
+    )
+
+    def load_models(config: object) -> LoadedPlugins:
+        loaded = LoadedPlugins()
+        loaded.models.register(ModelProfile("scripted", provider, speed=5, cost=1))
+        return loaded
+
+    events: list[str] = []
+    paused = JobRunner(
+        store=store,
+        workspace_root=tmp_path / "workspaces",
+        model_loader=load_models,
+        allow_local_repositories=True,
+        executor_factory=fake_executor_factory,
+        on_event=events.append,
+    ).execute(claimed)
+
+    assert paused.status == JobStatus.PAUSED
+    assert any(
+        event.startswith(f"[job] {paused.id} paused:") and "Step budget" in event
+        for event in events
+    )
 
 
 def test_hosted_job_rejects_unapproved_repository_tool_secrets(tmp_path: Path) -> None:
@@ -229,13 +285,19 @@ tools:
     claimed = queue.claim("worker")
     assert claimed is not None
 
+    events: list[str] = []
     result = JobRunner(
         store=store,
         workspace_root=tmp_path / "workspaces",
         model_loader=lambda config: LoadedPlugins(),
         allow_local_repositories=True,
         executor_factory=fake_executor_factory,
+        on_event=events.append,
     ).execute(claimed)
 
     assert result.status == JobStatus.FAILED
     assert "unapproved tool secret grants" in result.last_error
+    assert any(
+        event.startswith(f"[job] {result.id} failed:") and "unapproved tool secret grants" in event
+        for event in events
+    )
