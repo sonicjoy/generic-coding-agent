@@ -241,7 +241,12 @@ class JobRunner:
             transition_job(
                 job,
                 JobStatus.FAILED,
-                error="publication requested but no SCM publisher is configured",
+                error=(
+                    "publication requested for "
+                    f"{job.run_spec.publication.provider} "
+                    "but no SCM token is configured"
+                    f" (set GCA_{job.run_spec.publication.provider.upper()}_TOKEN)"
+                ),
             )
             self.store.save(job)
             return

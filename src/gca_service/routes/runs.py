@@ -55,6 +55,10 @@ async def create_run(request: Request) -> JSONResponse:
             allowed_hosts=state.settings.allowed_repository_hosts,
             allow_local=state.settings.allow_local_repositories,
         )
+        can_publish, error = state.can_publish(spec.publication)
+        if not can_publish:
+            return JSONResponse({"error": error}, status_code=503)
+
         job = state.store.create(
             spec,
             idempotency_key=request.headers.get("idempotency-key"),

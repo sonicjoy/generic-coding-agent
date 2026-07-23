@@ -1,4 +1,4 @@
-"""Shared service dependencies."""
+\"""Shared service dependencies."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from gca.integrations.github import GitHubWebhookNormalizer
 from gca.integrations.gitlab import GitLabWebhookNormalizer
 from gca.integrations.gitlab_events import GitLabIssueEventNormalizer
 from gca.integrations.webhook_registration import WebhookRegistration
+from gca.jobs.models import PublicationTarget
 from gca.integrations.webhooks import WebhookNormalizer
 from gca.issue_sessions.ingestion import IssueSessionIngestor, StaticMembershipChecker
 from gca.issue_sessions.store import IssueSessionStore
@@ -67,7 +68,7 @@ class ServiceState:
                 "gitlab": GitLabWebhookNormalizer(trigger_label=settings.gitlab_trigger_label),
             },
             issue_store=issue_store,
-            issue_ingestor=IssueSessionIngestor(issue_store, membership=membership),
+            issue_ingestor=IssueSessionIngestor(issue_store, settings=settings, membership=membership),
             gitlab_registrations=registrations,
         )
 
@@ -76,3 +77,7 @@ class ServiceState:
         if registration is None:
             raise KeyError(registration_id)
         return GitLabIssueEventNormalizer(registration)
+
+    def can_publish(self, publication: PublicationTarget | None) -> tuple[bool, str | None]:
+        """Delegates to settings.can_publish."""
+        return self.settings.can_publish(publication)

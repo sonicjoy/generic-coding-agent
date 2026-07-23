@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from gca.integrations.gitlab_events import NormalizedGitLabEvent
 from gca.integrations.webhook_registration import WebhookRegistration
@@ -25,7 +26,8 @@ from gca.issue_sessions.store import (
     IngestResult,
     IssueSessionStore,
 )
-from gca.jobs.models import utc_now
+from gca.jobs.models import PublicationTarget, utc_now
+from gca_service.config import ServiceSettings
 
 
 @dataclass(frozen=True)
@@ -68,11 +70,13 @@ class IssueSessionIngestor:
         self,
         store: IssueSessionStore,
         *,
+        settings: ServiceSettings,
         membership: MembershipChecker | None = None,
         turn_max_steps: int = 25,
         generation_max_steps: int = 100,
     ) -> None:
         self.store = store
+        self.settings = settings
         self.membership = membership or EnvTokenMembershipChecker()
         self.turn_max_steps = turn_max_steps
         self.generation_max_steps = generation_max_steps
@@ -201,6 +205,16 @@ class IssueSessionIngestor:
                 lease_epoch=generation.lease_epoch,
             )
         )
+        publication_spec = _to_publication_target(registration)
+        can_publish, error_message = self.settings.can_publish(publication_spec)
+        if not can_publish:
+            return IngestResult(
+                status="ignored",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                event_id=str(uuid.uuid4()),  # Temporary unique ID
+                reason=error_message,
+            )
         task = _issue_task(event.issue_title, event.issue_description)
         job = uow.create_turn_job(
             turn=turn,
@@ -424,6 +438,16 @@ class IssueSessionIngestor:
                 metadata={"inbound_event_id": inbound.id},
             )
         )
+        publication_spec = _to_publication_target(registration)
+        can_publish, error_message = self.settings.can_publish(publication_spec)
+        if not can_publish:
+            return IngestResult(
+                status="ignored",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                event_id=inbound.id,
+                reason=error_message,
+            )
         task = _follow_up_task(session, generation, event)
         job = uow.create_turn_job(
             turn=turn,
@@ -664,3 +688,12 @@ def _follow_up_task(
             f"Pipeline {event.pipeline_id} status={event.pipeline_status} sha={event.pipeline_sha}"
         )
     return "\n\n".join(parts)
+
+
+def _to_publication_target(registration: WebhookRegistration) -> PublicationTarget | None:
+    if registration.repository_url.startswith("https://gitlab."):
+        return PublicationTarget(provider="gitlab")
+    if registration.repository_url.startswith("https://github."):
+        return PublicationTarget(provider="github")
+    # TODO: Add explicit configuration for publication target. Issue #62
+    return None

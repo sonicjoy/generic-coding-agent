@@ -165,6 +165,136 @@ def test_github_webhook_applies_service_default_max_steps(tmp_path: Path) -> Non
     assert job.run_spec.max_steps == 100
 
 
+def test_github_webhook_publication_requires_token(tmp_path: Path) -> None:
+    # Set up settings without a github_token.
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-gh-webhook-fail",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"github.com"}),
+        allowed_github_projects=frozenset({"owner/repo"}),
+        github_webhook_secret="webhook-secret-123456",
+    )
+    client = TestClient(create_app(settings))
+
+    body = json.dumps(
+        {
+            "action": "labeled",
+            "label": {"name": "gca-run"},
+            "repository": {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            },
+            "issue": {
+                "number": 5,
+                "title": "Fix issue",
+                "body": "Details",
+                "pull_request": {},
+            },
+        }
+    ).encode()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret-123456",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    headers = {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "delivery-pub-fail",
+        "X-Hub-Signature-256": signature,
+        "Content-Type": "application/json",
+    }
+
+    response = client.post("/webhooks/github", content=body, headers=headers)
+    assert response.status_code == 503
+    assert "GCA_GITHUB_TOKEN" in response.json()["error"]
+
+    # Test successful case with github_token present.
+    settings_success = ServiceSettings(
+        data_dir=tmp_path / "service-gh-webhook-success",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"github.com"}),
+        allowed_github_projects=frozenset({"owner/repo"}),
+        github_webhook_secret="webhook-secret-123456",
+        github_token="ghp_test_token",
+    )
+    client_success = TestClient(create_app(settings_success))
+    response_success = client_success.post(
+        "/webhooks/github", content=body, headers=headers
+    )
+    assert response_success.status_code == 202
+
+
+def test_gitlab_webhook_publication_requires_token(tmp_path: Path) -> None:
+    # Set up settings without a gitlab_token.
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-gl-webhook-fail",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"gitlab.com"}),
+        allowed_gitlab_projects=frozenset({"owner/repo"}),
+        gitlab_webhook_secret="webhook-secret-123456",
+        gitlab_host="gitlab.com",
+    )
+    client = TestClient(create_app(settings))
+
+    body = json.dumps(
+        {
+            "object_kind": "merge_request",
+            "project": {
+                "path_with_namespace": "owner/repo",
+                "web_url": "https://gitlab.com/owner/repo",
+            },
+            "object_attributes": {
+                "action": "update",
+                "last_commit": {"id": "abc"},
+                "iid": 1,
+                "target_branch": "main",
+                "description": "description",
+                "title": "A title",
+                "labels": [{"title": "gca-run"}],
+                "url": "https://gitlab.com/owner/repo/-/merge_requests/1",
+            },
+        }
+    ).encode()
+    signature = (
+        "sha256="
+        + hmac.new(
+            b"webhook-secret-123456",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    headers = {
+        "X-Gitlab-Event": "Merge Request Hook",
+        "X-Gitlab-Token": "webhook-secret-123456",
+        "Content-Type": "application/json",
+    }
+
+    # Expect 503 because Gitlab token is missing for publication.
+    response = client.post("/webhooks/gitlab", content=body, headers=headers)
+    assert response.status_code == 503
+    assert "GCA_GITLAB_TOKEN" in response.json()["error"]
+
+    # Test successful case with gitlab_token present.
+    settings_success = ServiceSettings(
+        data_dir=tmp_path / "service-gl-webhook-success",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"gitlab.com"}),
+        allowed_gitlab_projects=frozenset({"owner/repo"}),
+        gitlab_webhook_secret="webhook-secret-123456",
+        gitlab_token="glp_test_token",
+        gitlab_host="gitlab.com",
+    )
+    client_success = TestClient(create_app(settings_success))
+    response_success = client_success.post(
+        "/webhooks/gitlab", content=body, headers=headers
+    )
+    assert response_success.status_code == 202
+
+
 def test_create_run_applies_service_default_max_steps(tmp_path: Path) -> None:
     settings = ServiceSettings(
         data_dir=tmp_path / "service-run-budget",
@@ -255,3 +385,66 @@ def test_paused_run_can_resume_with_larger_budget(tmp_path: Path) -> None:
     resumed = state.store.load(job.id)
     assert resumed.status == JobStatus.QUEUED
     assert resumed.run_spec.max_steps == 10
+
+def test_publication_requires_token_run_creation(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-publish-fail",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["publication"] = {"provider": "github", "target": "owner/repo/pull/1"}
+
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 503
+    assert "GCA_GITHUB_TOKEN" in response.json()["error"]
+
+    # Test with GitLab publication and missing GitLab token.
+    payload["publication"] = {"provider": "gitlab", "target": "owner/repo/merge_request/1"}
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+    assert response.status_code == 503
+    assert "GCA_GITLAB_TOKEN" in response.json()["error"]
+
+    # Test with GitHub publication and token present.
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-publish-success-github",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        github_token="gh-token",
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["publication"] = {"provider": "github", "target": "owner/repo/pull/1"}
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+    assert response.status_code == 202
+
+    # Test with GitLab publication and token present.
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-publish-success-gitlab",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        gitlab_token="gl-token",
+    )
+    client = TestClient(create_app(settings))
+    payload = _run_payload()
+    payload["publication"] = {"provider": "gitlab", "target": "owner/repo/merge_request/1"}
+    response = client.post(
+        "/runs",
+        json=payload,
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+    assert response.status_code == 202

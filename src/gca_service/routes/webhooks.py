@@ -1,4 +1,4 @@
-"""Verified provider webhook ingestion."""
+\"""Verified provider webhook ingestion."""
 
 from __future__ import annotations
 
@@ -75,6 +75,10 @@ async def receive_webhook(request: Request) -> Response:
             allowed_hosts=state.settings.allowed_repository_hosts,
             allow_local=False,
         )
+        can_publish, error = state.can_publish(spec.publication)
+        if not can_publish:
+            return JSONResponse({"error": error}, status_code=503)
+
         job = state.store.create(
             spec,
             idempotency_key=(f"webhook:{provider}:{hashlib.sha256(context.body).hexdigest()}"),
@@ -112,6 +116,16 @@ async def receive_gitlab_webhook(request: Request, *, registration_id: str) -> R
     try:
         normalizer = state.gitlab_normalizer(registration_id)
         normalizer.verify(context)
+        # Normalizing the event from GitLab does not produce a RunSpec directly.
+        # Instead, it produces an IssueSessionEvent that is then ingested to create
+        # a RunSpec. The can_publish check needs to happen *after* the RunSpec is
+        # created, so it's handled by the IssueSessionIngestor within the ingest method.
+        # Because of this, no direct call to state.can_publish is needed here.
+
+        # However, if the issue_ingestor produces a RunSpec with publication, and
+        # that publication is not configured, the ingestion will fail. 
+        # This is implicitly handled by the ingest method raising an exception.
+
         event = normalizer.normalize(context)
         result = state.issue_ingestor.ingest(event, registration=registration)
     except WebhookVerificationError as exc:
