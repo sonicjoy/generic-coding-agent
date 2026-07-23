@@ -56,7 +56,7 @@ class RoutingPolicy:
     """Model and workflow preferences for a run."""
 
     workflow: str = WORKFLOW_AUTO
-    model_preferences: dict[str, str] = field(default_factory=dict)
+    model_preferences: dict[str, tuple[str, ...]] = field(default_factory=dict)
     minimum_strength: dict[str, int] = field(default_factory=dict)
     max_review_cycles: int = 2
     feature_threshold: int = 3
@@ -85,7 +85,7 @@ class RoutingPolicy:
         if workflow not in WORKFLOWS:
             raise RoutingConfigError(f"workflow must be one of: {', '.join(sorted(WORKFLOWS))}")
 
-        model_preferences = _string_mapping(raw.get("models", {}), "models")
+        model_preferences = _model_preference_mapping(raw.get("models", {}), "models")
         _validate_role_keys(model_preferences, "models")
 
         minimum_strength = _score_mapping(raw.get("minimum_strength", {}), "minimum_strength")
@@ -139,10 +139,16 @@ class RoutingPolicy:
             large_keywords=_keywords(complexity_raw.get("large_keywords"), DEFAULT_LARGE_KEYWORDS),
         )
 
-    def preferred_model(self, role: str) -> str | None:
-        """Return an explicit model preference for ``role``, if configured."""
+    def preferred_models(self, role: str) -> tuple[str, ...]:
+        """Return ordered model preferences for ``role`` (primary then fallbacks)."""
 
-        return self.model_preferences.get(role)
+        return self.model_preferences.get(role, ())
+
+    def preferred_model(self, role: str) -> str | None:
+        """Return the primary model preference for ``role``, if configured."""
+
+        models = self.preferred_models(role)
+        return models[0] if models else None
 
     def min_strength(self, role: str, complexity: str) -> int:
         """Return the minimum model strength for a role and task complexity."""
@@ -187,16 +193,35 @@ def _integer(value: object, path: str, *, minimum: int, maximum: int) -> int:
     return value
 
 
-def _string_mapping(value: object, path: str) -> dict[str, str]:
+def _model_preference_mapping(value: object, path: str) -> dict[str, tuple[str, ...]]:
     if not isinstance(value, Mapping):
         raise RoutingConfigError(f"{path} must be a mapping")
-    result: dict[str, str] = {}
+    result: dict[str, tuple[str, ...]] = {}
     for raw_key, raw_value in value.items():
         key = str(raw_key)
-        if not isinstance(raw_value, str) or not raw_value.strip():
-            raise RoutingConfigError(f"{path}.{key} must be a non-empty string")
-        result[key] = raw_value
+        result[key] = _model_preference_list(raw_value, f"{path}.{key}")
     return result
+
+
+def _model_preference_list(value: object, path: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        if not value.strip():
+            raise RoutingConfigError(f"{path} must be a non-empty string")
+        return (value,)
+    if isinstance(value, list):
+        if not value:
+            raise RoutingConfigError(f"{path} must be a non-empty list of model names")
+        names: list[str] = []
+        seen: set[str] = set()
+        for index, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                raise RoutingConfigError(f"{path}[{index}] must be a non-empty string")
+            if item in seen:
+                raise RoutingConfigError(f"{path} contains duplicate model '{item}'")
+            seen.add(item)
+            names.append(item)
+        return tuple(names)
+    raise RoutingConfigError(f"{path} must be a model name or a list of model names")
 
 
 def _score_mapping(value: object, path: str) -> dict[str, int]:

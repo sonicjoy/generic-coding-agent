@@ -259,11 +259,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     config = replace(_build_config(args), prepare_executor=False)
     loaded = _load_models(args, config)
     coordinator = create_coordinator(config, loaded.models, loaded_plugins=loaded)
-    missing_models = {
-        role: name
-        for role, name in coordinator.policy.model_preferences.items()
-        if loaded.models.get(name) is None
-    }
+    missing_models: dict[str, str] = {}
+    for role, names in coordinator.policy.model_preferences.items():
+        if not any(loaded.models.get(name) is not None for name in names):
+            missing_models[role] = " | ".join(names)
     if missing_models:
         details = ", ".join(f"{role}={name}" for role, name in sorted(missing_models.items()))
         raise SystemExit(f"Invalid model bindings: {details}")

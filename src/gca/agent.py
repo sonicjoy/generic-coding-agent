@@ -114,6 +114,9 @@ class Agent:
                 return self._result()
 
             response = self.provider.complete(session.messages, self.registry.specs())
+            active_name = getattr(self.provider, "active_name", None)
+            if isinstance(active_name, str) and active_name:
+                session.active_model = active_name
             response.content = self.context.redact(response.content)
             session.step_count += 1
             session.messages.append(

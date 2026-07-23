@@ -68,7 +68,10 @@ routing:
     config = load_repo_config(tmp_path, [path])
 
     assert config.routing.workflow == "feature"
-    assert config.routing.model_preferences == {"fast": "quick", "review": "critic"}
+    assert config.routing.model_preferences == {
+        "fast": ("quick",),
+        "review": ("critic",),
+    }
 
 
 def test_rejects_path_escape(tmp_path: Path) -> None:
