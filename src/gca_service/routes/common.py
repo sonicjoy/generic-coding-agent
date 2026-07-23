@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from gca.jobs.models import Job, RunSpec
+from gca.session import SessionStore
 from gca_service.auth import is_authorized
 from gca_service.config import ServiceSettings
 from gca_service.state import ServiceState
@@ -114,7 +116,7 @@ def job_payload(job: Job) -> dict[str, Any]:
     """Return the stable public representation of a job."""
 
     usage = dict(job.llm_usage or {})
-    return {
+    payload: dict[str, Any] = {
         "id": job.id,
         "status": job.status.value,
         "attempt": job.attempt,
@@ -134,4 +136,21 @@ def job_payload(job: Job) -> dict[str, Any]:
         "lease_expires_at": job.lease_expires_at,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
+    }
+    payload.update(_session_progress(job))
+    return payload
+
+
+def _session_progress(job: Job) -> dict[str, Any]:
+    if not job.session_id or not job.workspace_path:
+        return {}
+    try:
+        session = SessionStore(Path(job.workspace_path).parent / "sessions").load(job.session_id)
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+    workflow = {"phase": session.workflow.phase} if session.workflow is not None else None
+    return {
+        "step_count": session.step_count,
+        "workflow": workflow,
+        "session_status": session.status,
     }

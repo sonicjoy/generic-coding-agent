@@ -330,19 +330,41 @@ class SqliteJobStore:
         return job
 
     def touch_lease(self, job_id: str, worker_id: str, *, lease_seconds: int) -> None:
-        """Renew lease columns without changing the optimistic job payload version."""
+        """Renew lease/progress timestamps without changing the optimistic version."""
 
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
         with self._connect() as connection:
-            cursor = connection.execute(
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
                 """
-                UPDATE jobs
-                SET lease_expires_at = ?
+                SELECT data FROM jobs
                 WHERE id = ? AND lease_owner = ? AND status IN (?, ?)
                 """,
                 (
-                    time.time() + lease_seconds,
+                    job_id,
+                    worker_id,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PUBLISHING.value,
+                ),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise JobConcurrencyError(f"worker lost job lease: {job_id}")
+            job = Job.from_dict(json.loads(str(row["data"])))
+            job.lease_expires_at = time.time() + lease_seconds
+            job.updated_at = utc_now()
+            payload = job.to_dict()
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET data = ?, lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND lease_owner = ? AND status IN (?, ?)
+                """,
+                (
+                    json.dumps(payload, sort_keys=True),
+                    job.lease_expires_at,
+                    job.updated_at,
                     job_id,
                     worker_id,
                     JobStatus.RUNNING.value,
@@ -350,7 +372,9 @@ class SqliteJobStore:
                 ),
             )
             if cursor.rowcount != 1:
+                connection.rollback()
                 raise JobConcurrencyError(f"worker lost job lease: {job_id}")
+            connection.commit()
 
     def release_lease(self, job_id: str, worker_id: str) -> Job | None:
         """Requeue a running/publishing job held by ``worker_id`` (best-effort).
