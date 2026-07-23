@@ -47,6 +47,7 @@ def test_github_issue_webhook_verifies_and_normalizes() -> None:
     assert normalizer.delivery_id(context) == "delivery-1"
     assert spec is not None
     assert spec.labels["issue_id"] == "42"
+    assert spec.labels["issue_title"] == "Fix null metadata"
     assert spec.publication is not None and spec.publication.provider == "github"
     assert "untrusted request data" in spec.task
 
@@ -108,4 +109,5 @@ def test_gitlab_issue_webhook_verifies_and_normalizes() -> None:
     assert normalizer.delivery_id(context) == "delivery-2"
     assert spec is not None
     assert spec.labels["issue_id"] == "7"
+    assert spec.labels["issue_title"] == "Repair pipeline"
     assert spec.publication is not None and spec.publication.provider == "gitlab"

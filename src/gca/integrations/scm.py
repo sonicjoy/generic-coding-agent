@@ -194,7 +194,7 @@ class PublicationController:
         changed_files, changed_lines = _staged_diff(workspace, self.credentials)
         if changed_files:
             _enforce_diff(policy, changed_files, changed_lines)
-            message = _commit_message(policy.commit_prefix, job.run_spec.task)
+            message = _commit_message(policy.commit_prefix, job)
             _git(
                 workspace,
                 [
@@ -227,7 +227,7 @@ class PublicationController:
 
         sha = _git(workspace, ["rev-parse", "HEAD"], self.credentials).strip()
         adapter.push(workspace, branch, job.run_spec.repository.url)
-        title = _commit_message(policy.commit_prefix, job.run_spec.task)
+        title = _commit_message(policy.commit_prefix, job)
         request = ChangeRequest(
             repository_url=job.run_spec.repository.url,
             source_branch=branch,
@@ -543,20 +543,56 @@ def _branch_name(prefix: str, job_id: str) -> str:
     return branch
 
 
-def _commit_message(prefix: str, task: str) -> str:
-    summary = " ".join(task.strip().splitlines()[0].split())
-    if len(summary) > 60:
-        summary = summary[:57].rstrip() + "..."
+def _commit_message(prefix: str, job: Job) -> str:
+    summary = _publication_summary(job)
+    if len(summary) > 72:
+        summary = summary[:69].rstrip() + "..."
     return f"{prefix}: {summary}"
 
 
+def _publication_summary(job: Job) -> str:
+    """Prefer the originating issue title over the SCM framing preamble."""
+
+    labels = job.run_spec.labels
+    issue_title = str(labels.get("issue_title", "")).strip()
+    if issue_title:
+        return " ".join(issue_title.split())
+
+    task = job.run_spec.task.strip()
+    for line in task.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("title:"):
+            extracted = stripped.split(":", 1)[1].strip()
+            if extracted:
+                return " ".join(extracted.split())
+
+    for line in task.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("scm issue task"):
+            continue
+        return " ".join(stripped.split())
+    return "automated change"
+
+
 def _change_request_body(job: Job) -> str:
-    lines = [
-        "Automated change produced by generic-coding-agent.",
-        "",
-        f"Job: `{job.id}`",
-        f"Task: {job.run_spec.task.strip()}",
-    ]
+    labels = job.run_spec.labels
+    issue_id = str(labels.get("issue_id", "")).strip()
+    provider = str(labels.get("provider", "")).strip().lower()
+    lines: list[str] = []
+    if issue_id:
+        # GitHub closing keyword; GitLab also recognizes Fixes/Closes.
+        keyword = "Closes" if provider == "gitlab" else "Fixes"
+        lines.extend([f"{keyword} #{issue_id}", ""])
+    lines.extend(
+        [
+            "Automated change produced by generic-coding-agent.",
+            "",
+            f"Job: `{job.id}`",
+            f"Task: {job.run_spec.task.strip()}",
+        ]
+    )
     if job.session_id:
         lines.append(f"Session: `{job.session_id}`")
     return "\n".join(lines)
