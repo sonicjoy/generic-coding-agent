@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
+from gca.agent import AgentResult
 from gca.git_credentials import GitCredentials
 from gca.integrations.github import GitHubScmAdapter
 from gca.integrations.gitlab import GitLabScmAdapter
 from gca.integrations.repository import repository_identity
 from gca.integrations.scm import PublicationController, ScmAdapter
-from gca.jobs.models import Job, JobStatus, RepositorySpec
+from gca.issue_sessions.models import Turn
+from gca.issue_sessions.outbox import HttpGitLabApiClient, OutboxProcessor, RecordingGitLabApiClient
+from gca.issue_sessions.outcomes import TurnOutcomeApplicator
+from gca.issue_sessions.retention import RetentionJanitor
+from gca.jobs.models import Job, JobStatus, RepositorySpec, utc_now
 from gca.jobs.runner import JobRunner, RuntimeModelLoader
 from gca.jobs.store import JobConcurrencyError
+from gca.session import SessionStore
 from gca.workspace.prepare import repository_host
 from gca_service.state import ServiceState
 
@@ -83,21 +91,34 @@ class ServiceWorker:
         *,
         on_event: EventSink | None = None,
         model_loader: RuntimeModelLoader | None = None,
+        outbox_processor: OutboxProcessor | None = None,
     ) -> None:
         self.state = state
         self.on_event = on_event
         self.model_loader = model_loader
+        self.outbox_processor = outbox_processor or _default_outbox(state)
+        self._idle_ticks = 0
 
     def run_once(self) -> Job | None:
         """Claim and execute one due job, returning ``None`` when idle."""
 
         settings = self.state.settings
+        self.outbox_processor.process_pending()
         job = self.state.queue.claim(
             settings.worker_id,
             lease_seconds=settings.lease_seconds,
         )
         if job is None:
+            self._idle_ticks += 1
+            if self._idle_ticks % 30 == 0:
+                RetentionJanitor(
+                    self.state.issue_store,
+                    workspace_root=settings.workspace_root,
+                    workspace_retention_seconds=settings.workspace_retention_seconds,
+                    log_retention_seconds=settings.log_retention_seconds,
+                ).run()
             return None
+        self._idle_ticks = 0
 
         def clone_credentials(repository: RepositorySpec) -> GitCredentials | None:
             host = repository_host(repository.url)
@@ -132,6 +153,8 @@ class ServiceWorker:
                 allowed_tool_secret_grants=tool_secret_grants,
             )
             result = runner.execute(job)
+            self._finalize_issue_turn(result)
+            self.outbox_processor.process_pending()
             lease.check()
             return result
 
@@ -143,6 +166,65 @@ class ServiceWorker:
             job = self.run_once()
             if job is None:
                 stopper.wait(self.state.settings.poll_seconds)
+
+    def _finalize_issue_turn(self, job: Job) -> None:
+        turn_id = job.run_spec.labels.get("turn_id")
+        if not turn_id:
+            return
+        workspace = job.workspace_path
+        if workspace:
+            with self.state.issue_store.unit_of_work() as uow:
+                row = uow.connection.execute(
+                    "SELECT data FROM issue_turns WHERE id = ?",
+                    (turn_id,),
+                ).fetchone()
+                if row is not None:
+                    turn = Turn.from_dict(json.loads(str(row["data"])))
+                    turn.workspace_path = workspace
+                    turn.agent_session_id = job.session_id
+                    uow.save_turn(turn)
+                    marker = Path(workspace).parent / "retention.json"
+                    marker.write_text(
+                        json.dumps(
+                            {
+                                "status": job.status.value,
+                                "updated_at": utc_now(),
+                                "turn_id": turn_id,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+        if job.session_id and job.workspace_path:
+            sessions = SessionStore(Path(job.workspace_path).parent / "sessions")
+            try:
+                session = sessions.load(job.session_id)
+            except FileNotFoundError:
+                session = None
+        else:
+            session = None
+        result = AgentResult(
+            status=(
+                "paused"
+                if job.status == JobStatus.PAUSED
+                else "failed"
+                if job.status == JobStatus.FAILED
+                else "completed"
+            ),
+            steps=session.step_count if session is not None else 0,
+            final_message=job.result_summary or job.last_error,
+            outcome_kind=(
+                str(session.provider_state.get("outcome_kind")) if session is not None else None
+            ),
+        )
+        # needs_human is stored as completed job with paused agent session outcome.
+        if session is not None and session.provider_state.get("outcome_kind") == "needs_human":
+            result = AgentResult(
+                status="paused",
+                steps=session.step_count,
+                final_message=session.final_message,
+                outcome_kind="needs_human",
+            )
+        TurnOutcomeApplicator(self.state.issue_store).apply(turn_id=turn_id, result=result)
 
 
 def _publisher(state: ServiceState) -> PublicationController | None:
@@ -167,4 +249,21 @@ def _publisher(state: ServiceState) -> PublicationController | None:
         )
         if adapters
         else None
+    )
+
+
+def _default_outbox(state: ServiceState) -> OutboxProcessor:
+    settings = state.settings
+    if settings.gitlab_token:
+        api: RecordingGitLabApiClient | HttpGitLabApiClient = HttpGitLabApiClient(
+            settings.gitlab_token,
+            api_url=settings.gitlab_api_url,
+        )
+    else:
+        api = RecordingGitLabApiClient()
+    return OutboxProcessor(
+        state.issue_store,
+        api,
+        git_token=settings.gitlab_token,
+        allow_auto_merge_projects=settings.allow_auto_merge_projects,
     )

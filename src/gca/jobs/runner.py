@@ -175,6 +175,12 @@ class JobRunner:
         repo_config: RepoConfig,
     ) -> None:
         job.result_summary = self.credentials.redact(result.final_message)
+        outcome = result.outcome_kind
+        if result.status == STATUS_PAUSED and outcome == "needs_human":
+            # Human-wait is a successful turn completion for the job/outbox layer.
+            transition_job(job, JobStatus.COMPLETED)
+            self.store.save(job)
+            return
         if result.status == STATUS_PAUSED:
             transition_job(job, JobStatus.PAUSED, error=result.final_message)
             self.store.save(job)

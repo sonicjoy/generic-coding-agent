@@ -49,6 +49,7 @@ class PublicationPolicy:
     max_files: int = 100
     max_changed_lines: int = 5000
     commit_prefix: str = "gca"
+    auto_merge: bool = False
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any] | None) -> PublicationPolicy:
@@ -62,10 +63,14 @@ class PublicationPolicy:
             "max_files",
             "max_changed_lines",
             "commit_prefix",
+            "auto_merge",
         }
         unknown = sorted(set(raw) - allowed)
         if unknown:
             raise PublicationError(f"unknown publication keys: {', '.join(unknown)}")
+        auto_merge = raw.get("auto_merge", False)
+        if not isinstance(auto_merge, bool):
+            raise PublicationError("auto_merge must be a boolean")
         return cls(
             required_checks=_strings(raw.get("required_checks", []), "required_checks"),
             allowed_paths=_strings(raw.get("allowed_paths", []), "allowed_paths"),
@@ -82,6 +87,7 @@ class PublicationPolicy:
                 "max_changed_lines",
             ),
             commit_prefix=_nonempty(raw.get("commit_prefix", "gca"), "commit_prefix"),
+            auto_merge=auto_merge,
         )
 
 

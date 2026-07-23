@@ -92,7 +92,8 @@ def build_registry_with_extras(
 ) -> ToolRegistry:
     """Build the tool registry without reloading already-loaded plugins."""
 
-    registry = build_registry()
+    repo_config = config.repo_config or load_repo_config(config.workspace)
+    registry = build_registry(hosted=repo_config.runtime.profile == "hosted")
     registry.register(LoadSkillTool(skills))
     if loaded_plugins is not None:
         loaded_plugins.register_tools(registry)

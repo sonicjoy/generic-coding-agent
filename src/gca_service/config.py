@@ -11,6 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from gca.integrations.webhook_registration import (
+    RegistrationError,
+    WebhookRegistration,
+    parse_registrations,
+)
+
 
 class ServiceConfigError(ValueError):
     """Raised when hosted-service settings are unsafe or incomplete."""
@@ -43,6 +49,12 @@ class ServiceSettings:
     model_paths: tuple[Path, ...] = ()
     plugin_dir: Path | None = None
     tool_secret_grants: dict[str, dict[str, frozenset[str]]] = field(default_factory=dict)
+    gitlab_webhook_registrations: dict[str, WebhookRegistration] = field(default_factory=dict)
+    allow_auto_merge_projects: frozenset[int] = frozenset()
+    workspace_retention_seconds: int = 86400
+    log_retention_seconds: int = 2_592_000
+    bot_user_id: int | None = None
+    membership_access_levels: dict[tuple[int, int], int] = field(default_factory=dict)
 
     @property
     def database_path(self) -> Path:
@@ -99,6 +111,22 @@ class ServiceSettings:
                 Path(values["GCA_PLUGIN_DIR"]).resolve() if values.get("GCA_PLUGIN_DIR") else None
             ),
             tool_secret_grants=_secret_grants(values.get("GCA_TOOL_SECRET_GRANTS", "")),
+            gitlab_webhook_registrations=_registrations(
+                values.get("GCA_GITLAB_WEBHOOK_REGISTRATIONS", "")
+            ),
+            allow_auto_merge_projects=_int_csv(values.get("GCA_ALLOW_AUTO_MERGE_PROJECTS", "")),
+            workspace_retention_seconds=_nonnegative_integer(
+                values.get("GCA_WORKSPACE_RETENTION_SECONDS", "86400"),
+                "GCA_WORKSPACE_RETENTION_SECONDS",
+            ),
+            log_retention_seconds=_nonnegative_integer(
+                values.get("GCA_LOG_RETENTION_SECONDS", "2592000"),
+                "GCA_LOG_RETENTION_SECONDS",
+            ),
+            bot_user_id=_optional_int(values.get("GCA_GITLAB_BOT_USER_ID")),
+            membership_access_levels=_membership_levels(
+                values.get("GCA_GITLAB_MEMBERSHIP_LEVELS", "")
+            ),
         )
         settings.validate()
         return settings
@@ -167,10 +195,80 @@ class ServiceSettings:
             raise ServiceConfigError(
                 f"service-owned secrets cannot be granted to tools: {', '.join(sorted(reserved))}"
             )
+        if self.gitlab_webhook_secret and not self.gitlab_webhook_registrations:
+            # Legacy single-secret mode remains valid with project allowlist.
+            pass
+        if len(self.gitlab_webhook_registrations) > 1 and not all(
+            registration.project_id > 0
+            for registration in self.gitlab_webhook_registrations.values()
+        ):
+            raise ServiceConfigError("every GitLab webhook registration needs a project_id")
 
 
 def _csv(value: str) -> frozenset[str]:
     return frozenset(item.strip() for item in value.split(",") if item.strip())
+
+
+def _int_csv(value: str) -> frozenset[int]:
+    result: set[int] = set()
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            result.add(int(item))
+        except ValueError as exc:
+            raise ServiceConfigError("auto-merge project ids must be integers") from exc
+    return frozenset(result)
+
+
+def _nonnegative_integer(value: str, name: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ServiceConfigError(f"{name} must be an integer") from exc
+    if parsed < 0:
+        raise ServiceConfigError(f"{name} must be non-negative")
+    return parsed
+
+
+def _optional_int(value: str | None) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ServiceConfigError("bot user id must be an integer") from exc
+
+
+def _registrations(raw: str) -> dict[str, WebhookRegistration]:
+    try:
+        return parse_registrations(raw)
+    except RegistrationError as exc:
+        raise ServiceConfigError(str(exc)) from exc
+
+
+def _membership_levels(raw: str) -> dict[tuple[int, int], int]:
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ServiceConfigError(f"membership levels must be valid JSON: {exc}") from exc
+    if not isinstance(value, list):
+        raise ServiceConfigError("membership levels must be a JSON array")
+    result: dict[tuple[int, int], int] = {}
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ServiceConfigError("membership level entries must be objects")
+        try:
+            project_id = int(item["project_id"])
+            user_id = int(item["user_id"])
+            access_level = int(item["access_level"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ServiceConfigError("membership level entries are invalid") from exc
+        result[(project_id, user_id)] = access_level
+    return result
 
 
 def _secret_grants(value: str) -> dict[str, dict[str, frozenset[str]]]:

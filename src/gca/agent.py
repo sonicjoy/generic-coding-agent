@@ -21,7 +21,14 @@ from typing import Protocol
 from gca.providers.base import LLMProvider, Message, ToolCall
 from gca.session import STATUS_ACTIVE, STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session
 from gca.tools.base import ToolContext, ToolError, ToolRegistry
-from gca.tools.control import FINISH_TOOL_NAME
+from gca.tools.control import (
+    CHANGES_READY_TOOL_NAME,
+    FAIL_TURN_TOOL_NAME,
+    FINISH_TOOL_NAME,
+    HOSTED_CONTROL_TOOL_NAMES,
+    NEEDS_HUMAN_TOOL_NAME,
+    NO_SAFE_CHANGE_TOOL_NAME,
+)
 
 # Callback invoked with human-readable progress events (e.g. for CLI logging).
 EventHook = Callable[[str], None]
@@ -44,6 +51,7 @@ class AgentResult:
     status: str
     steps: int
     final_message: str
+    outcome_kind: str | None = None
 
 
 class Agent:
@@ -101,6 +109,7 @@ class Agent:
             if session.step_count >= self.config.max_steps:
                 session.status = STATUS_PAUSED
                 session.final_message = f"Step budget ({self.config.max_steps}) exhausted."
+                session.provider_state["outcome_kind"] = "budget_exhausted"
                 self._persist()
                 return self._result()
 
@@ -132,6 +141,7 @@ class Agent:
             status=self.session.status,
             steps=self.session.step_count,
             final_message=self.session.final_message,
+            outcome_kind=str(self.session.provider_state.get("outcome_kind") or "") or None,
         )
 
     def _pending_tool_calls(self) -> list[ToolCall]:
@@ -159,11 +169,22 @@ class Agent:
             if fatal:
                 self.session.status = STATUS_FAILED
                 self.session.final_message = output
+                self.session.provider_state["outcome_kind"] = "failed"
                 self._persist()
                 return True
             if call.name == FINISH_TOOL_NAME and ok:
                 self.session.status = STATUS_COMPLETED
                 self.session.final_message = output
+                self.session.provider_state["outcome_kind"] = "changes_ready"
+                self._persist()
+                return True
+            if call.name in HOSTED_CONTROL_TOOL_NAMES and ok:
+                outcome = _hosted_outcome(call.name)
+                self.session.status = STATUS_FAILED if outcome == "failed" else STATUS_COMPLETED
+                if outcome == "needs_human":
+                    self.session.status = STATUS_PAUSED
+                self.session.final_message = output
+                self.session.provider_state["outcome_kind"] = outcome
                 self._persist()
                 return True
             self._persist()
@@ -190,3 +211,15 @@ class Agent:
                 True,
             )
         return (self.context.redact(result.output), result.ok, False)
+
+
+def _hosted_outcome(tool_name: str) -> str:
+    if tool_name == CHANGES_READY_TOOL_NAME:
+        return "changes_ready"
+    if tool_name == NEEDS_HUMAN_TOOL_NAME:
+        return "needs_human"
+    if tool_name == NO_SAFE_CHANGE_TOOL_NAME:
+        return "no_safe_change"
+    if tool_name == FAIL_TURN_TOOL_NAME:
+        return "failed"
+    return "changes_ready"

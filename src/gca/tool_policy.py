@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from gca.repo_config import RepoConfig
 from gca.tools.base import ToolRegistry
-from gca.tools.control import FINISH_TOOL_NAME
+from gca.tools.control import FINISH_TOOL_NAME, HOSTED_CONTROL_TOOL_NAMES
 from gca.tools.fixed import FixedCommandTool
 from gca.workflows import get_workflow
 
@@ -15,6 +15,7 @@ class ToolPolicyError(ValueError):
 
 _READ_ONLY_CAPABILITIES = frozenset({"control", "knowledge", "read_external", "read_fs"})
 _REVIEW_CAPABILITIES = _READ_ONLY_CAPABILITIES | {"execute"}
+_PROTECTED_CONTROL_TOOLS = frozenset({FINISH_TOOL_NAME}) | HOSTED_CONTROL_TOOL_NAMES
 
 
 def register_fixed_commands(registry: ToolRegistry, config: RepoConfig) -> None:
@@ -30,8 +31,9 @@ def validate_tool_policy(registry: ToolRegistry, config: RepoConfig) -> None:
     """Fail closed when policy entries reference unavailable tools."""
 
     available = set(registry.names())
-    if FINISH_TOOL_NAME in config.tools.deny:
-        raise ToolPolicyError("the finish tool cannot be denied")
+    denied_control = sorted(set(config.tools.deny) & _PROTECTED_CONTROL_TOOLS)
+    if denied_control:
+        raise ToolPolicyError("control tools cannot be denied: " + ", ".join(denied_control))
     referenced = set(config.tools.deny)
     for names in config.tools.phases.values():
         referenced.update(names)
@@ -80,6 +82,7 @@ def tool_names_for_phase(
     if config.runtime.profile == "hosted" and not explicitly_allows_shell:
         names.discard("run_command")
     names.add(FINISH_TOOL_NAME)
+    names.update(name for name in HOSTED_CONTROL_TOOL_NAMES if registry.get(name) is not None)
     capability_limit = {
         "planning": _READ_ONLY_CAPABILITIES,
         "review": _REVIEW_CAPABILITIES,
