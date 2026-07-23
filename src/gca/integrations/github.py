@@ -163,5 +163,6 @@ class GitHubWebhookNormalizer:
                 "provider": "github",
                 "project": project,
                 "issue_id": issue_number,
+                "issue_title": title,
             },
         )

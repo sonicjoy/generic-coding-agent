@@ -159,5 +159,6 @@ class GitLabWebhookNormalizer:
                 "provider": "gitlab",
                 "project": project_path,
                 "issue_id": issue_id,
+                "issue_title": title,
             },
         )
