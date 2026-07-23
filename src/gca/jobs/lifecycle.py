@@ -15,7 +15,12 @@ _TRANSITIONS = {
         JobStatus.CANCELLED,
     },
     JobStatus.PAUSED: {JobStatus.QUEUED, JobStatus.FAILED, JobStatus.CANCELLED},
-    JobStatus.PUBLISHING: {JobStatus.QUEUED, JobStatus.COMPLETED, JobStatus.FAILED},
+    JobStatus.PUBLISHING: {
+        JobStatus.QUEUED,
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.PAUSED,
+    },
     JobStatus.FAILED: {JobStatus.QUEUED},
     JobStatus.COMPLETED: set(),
     JobStatus.CANCELLED: set(),

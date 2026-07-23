@@ -59,6 +59,7 @@ class RoutingPolicy:
     model_preferences: dict[str, tuple[str, ...]] = field(default_factory=dict)
     minimum_strength: dict[str, int] = field(default_factory=dict)
     max_review_cycles: int = 2
+    review_step_reserve: int = 5
     feature_threshold: int = 3
     large_threshold: int = 6
     small_keywords: tuple[str, ...] = DEFAULT_SMALL_KEYWORDS
@@ -75,6 +76,7 @@ class RoutingPolicy:
             "models",
             "minimum_strength",
             "max_review_cycles",
+            "review_step_reserve",
             "complexity",
         }
         unknown = sorted(set(raw) - allowed)
@@ -93,6 +95,13 @@ class RoutingPolicy:
 
         max_review_cycles = _integer(
             raw.get("max_review_cycles", 2), "max_review_cycles", minimum=0, maximum=10
+        )
+
+        review_step_reserve = _integer(
+            raw.get("review_step_reserve", 5),
+            "review_step_reserve",
+            minimum=0,
+            maximum=50,
         )
 
         complexity = raw.get("complexity", {})
@@ -130,6 +139,7 @@ class RoutingPolicy:
             model_preferences=model_preferences,
             minimum_strength=minimum_strength,
             max_review_cycles=max_review_cycles,
+            review_step_reserve=review_step_reserve,
             feature_threshold=feature_threshold,
             large_threshold=large_threshold,
             small_keywords=_keywords(complexity_raw.get("small_keywords"), DEFAULT_SMALL_KEYWORDS),
@@ -175,6 +185,7 @@ class RoutingPolicy:
             "models": self.model_preferences,
             "minimum_strength": self.minimum_strength,
             "max_review_cycles": self.max_review_cycles,
+            "review_step_reserve": self.review_step_reserve,
             "feature_threshold": self.feature_threshold,
             "large_threshold": self.large_threshold,
             "small_keywords": self.small_keywords,

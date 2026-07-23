@@ -107,8 +107,11 @@ def test_feature_workflow_routes_separate_agents(tmp_path: Path) -> None:
                         "name": "run_command",
                         "arguments": {
                             "command": (
-                                'python -c "import greeting; '
-                                "assert greeting.greet('Ada') == 'Hello, Ada!'\""
+                                "python -c "
+                                + repr(
+                                    "import greeting; "
+                                    "assert greeting.greet('Ada') == 'Hello, Ada!'"
+                                )
                             )
                         },
                     }
@@ -436,6 +439,7 @@ def test_feature_implementation_reserves_steps_for_review(tmp_path: Path) -> Non
     ).run(session, store)
 
     assert first.status == "paused"
+    assert first.outcome_kind == "budget_exhausted"
     assert (tmp_path / "reserve.txt").exists()
     assert [run.phase for run in session.agent_runs] == ["planning", "implementation"]
     assert session.workflow is not None
@@ -507,5 +511,6 @@ def test_feature_tiny_budget_does_not_apply_review_reserve(tmp_path: Path) -> No
     ).run(session, store)
 
     assert result.status == "paused"
+    assert result.outcome_kind == "budget_exhausted"
     assert "Step budget" in (result.final_message or "")
     assert [run.phase for run in session.agent_runs] == ["planning"]

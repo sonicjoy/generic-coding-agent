@@ -76,3 +76,27 @@ def test_policy_rejects_duplicate_model_fallback() -> None:
 def test_policy_rejects_unknown_model_role() -> None:
     with pytest.raises(RoutingConfigError, match="unknown models roles"):
         RoutingPolicy.from_mapping({"models": {"unknown": "model"}})
+
+
+def test_policy_parses_review_step_reserve() -> None:
+    policy = RoutingPolicy.from_mapping({"review_step_reserve": 12})
+
+    assert policy.review_step_reserve == 12
+    assert RoutingPolicy().review_step_reserve == 5
+
+
+def test_policy_rejects_invalid_review_step_reserve() -> None:
+    with pytest.raises(RoutingConfigError, match="review_step_reserve"):
+        RoutingPolicy.from_mapping({"review_step_reserve": -1})
+    with pytest.raises(RoutingConfigError, match="review_step_reserve"):
+        RoutingPolicy.from_mapping({"review_step_reserve": 51})
+    with pytest.raises(RoutingConfigError, match="review_step_reserve"):
+        RoutingPolicy.from_mapping({"review_step_reserve": "five"})
+
+
+def test_review_step_reserve_participates_in_fingerprint() -> None:
+    baseline = RoutingPolicy().fingerprint()
+    larger = RoutingPolicy.from_mapping({"review_step_reserve": 10}).fingerprint()
+
+    assert larger != baseline
+    assert RoutingPolicy.from_mapping({"review_step_reserve": 5}).fingerprint() == baseline

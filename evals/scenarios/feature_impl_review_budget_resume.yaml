@@ -1,0 +1,43 @@
+id: feature_impl_review_budget_resume
+description: >
+  Implementation finishes within the held-back reserve and review completes in
+  the same run (or after resume) so a finished implementation is not stranded by
+  a review-phase budget pause.
+task: Implement finished work then review it
+workflow: feature
+# max_steps=8 with default reserve=5: plan 1 + impl 2 (create+finish under the
+# 2-step cap) + review 1 fits inside 8; the completed-implementation artifact is
+# present before review finishes.
+max_steps: 8
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create done.txt, then independently review it.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Finished implementation reviewed successfully.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: done.txt
+            content: ready
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Implementation finished.
+expect:
+  status: completed
+  workflow: feature
+  phases:
+    - planning
+    - implementation
+    - review
+  files:
+    done.txt:
+      equals: ready
+  final_contains: Finished implementation reviewed successfully.

@@ -23,7 +23,7 @@ from gca.plugins import LoadedPlugins
 from gca.providers.base import ProviderError
 from gca.repo_config import RepoConfig, load_repo_config
 from gca.runtime import RuntimeConfig, create_coordinator
-from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, SessionStore
+from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session, SessionStore
 from gca.workspace.layout import JobWorkspace
 from gca.workspace.prepare import WorkspaceError, prepare_repository
 
@@ -116,9 +116,18 @@ class JobRunner:
             self._heartbeat(job)
             repo_config = self._load_repo_config(layout.repository)
             lifecycle = self._build_lifecycle(job, layout.repository, repo_config)
-            result = self._run_agent(job, layout, repo_config, lifecycle.executor)
+            result, implementation_summary = self._run_agent(
+                job, layout, repo_config, lifecycle.executor
+            )
             self._heartbeat(job)
-            self._apply_result(job, result, repository, repo_config, lifecycle.executor)
+            self._apply_result(
+                job,
+                result,
+                repository,
+                repo_config,
+                lifecycle.executor,
+                implementation_summary=implementation_summary,
+            )
         except Exception as exc:
             self._handle_failure(job, exc)
         finally:
@@ -174,7 +183,7 @@ class JobRunner:
         layout: JobWorkspace,
         repo_config: RepoConfig,
         executor: CommandExecutor,
-    ) -> AgentResult:
+    ) -> tuple[AgentResult, str | None]:
         max_steps = job.run_spec.max_steps or repo_config.runtime.max_steps
         runtime = RuntimeConfig(
             workspace=layout.repository,
@@ -206,7 +215,8 @@ class JobRunner:
             loaded_plugins=loaded,
             on_event=lambda message: self._on_agent_event(job, message),
         )
-        return coordinator.run(session, sessions)
+        result = coordinator.run(session, sessions)
+        return result, _implementation_summary(session)
 
     def _apply_result(
         self,
@@ -215,6 +225,8 @@ class JobRunner:
         repository: Path,
         repo_config: RepoConfig,
         executor: CommandExecutor,
+        *,
+        implementation_summary: str | None = None,
     ) -> None:
         job.result_summary = self.credentials.redact(result.final_message)
         outcome = result.outcome_kind
@@ -224,7 +236,41 @@ class JobRunner:
             self.store.save(job)
             return
         if result.status == STATUS_PAUSED:
-            transition_job(job, JobStatus.PAUSED, error=result.final_message)
+            pause_error = _budget_pause_message(job, result.final_message)
+            # Finished implementations are draft-published so operators waiting on
+            # publication.change_request_url still get a visible recoverable artifact.
+            if (
+                implementation_summary
+                and job.run_spec.publication is not None
+                and self.publisher is not None
+            ):
+                try:
+                    transition_job(job, JobStatus.PUBLISHING)
+                    self.store.save(job)
+                    self._heartbeat(job)
+                    original = job.run_spec.publication
+                    job.run_spec = replace(
+                        job.run_spec,
+                        publication=replace(original, draft=True),
+                    )
+                    try:
+                        job.publication = dict(
+                            self.publisher.publish(
+                                job, repository, repo_config, executor=executor
+                            )
+                        )
+                    finally:
+                        # Restore the operator-requested draft flag for resume/complete.
+                        job.run_spec = replace(job.run_spec, publication=original)
+                    url = str(job.publication.get("change_request_url") or "").strip()
+                    if url:
+                        pause_error = f"{pause_error} Draft change request opened: {url}"
+                except PublicationError as exc:
+                    detail = self.credentials.redact(str(exc))
+                    pause_error = (
+                        f"{pause_error} Draft publication on pause failed: {detail}"
+                    )
+            transition_job(job, JobStatus.PAUSED, error=pause_error)
             self.store.save(job)
             return
         if result.status == STATUS_FAILED:
@@ -286,3 +332,24 @@ class JobRunner:
         self._heartbeat(job)
         if self.on_event is not None:
             self.on_event(message)
+
+
+def _implementation_summary(session: Session) -> str | None:
+    """Return a non-empty implementation artifact from the session workflow, if any."""
+
+    workflow = session.workflow
+    if workflow is None:
+        return None
+    summary = str(workflow.artifacts.get("implementation") or "").strip()
+    return summary or None
+
+
+def _budget_pause_message(job: Job, final_message: str) -> str:
+    """Build a recoverable pause signal for generic /runs and webhook jobs."""
+
+    summary = (final_message or "Step budget exhausted.").strip()
+    return (
+        f"{summary} "
+        f"Resume with POST /runs/{job.id}/resume (max_steps must exceed the prior "
+        "budget) or an authorized /agent fix comment."
+    )
