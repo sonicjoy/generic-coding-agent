@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from gca.jobs.models import Job
+from gca.jobs.models import Job, RunSpec
 from gca_service.auth import is_authorized
+from gca_service.config import ServiceSettings
 from gca_service.state import ServiceState
 
 
@@ -68,6 +70,14 @@ async def read_body(request: Request, *, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+def apply_default_max_steps(spec: RunSpec, settings: ServiceSettings) -> RunSpec:
+    """Fill ``max_steps`` from service settings when a run did not set one."""
+
+    if spec.max_steps is not None or settings.default_max_steps is None:
+        return spec
+    return replace(spec, max_steps=settings.default_max_steps)
+
+
 def job_payload(job: Job) -> dict[str, Any]:
     """Return the stable public representation of a job."""
 
@@ -82,6 +92,7 @@ def job_payload(job: Job) -> dict[str, Any]:
         "result_summary": job.result_summary,
         "last_error": job.last_error,
         "labels": job.run_spec.labels,
+        "max_steps": job.run_spec.max_steps,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }

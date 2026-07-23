@@ -12,6 +12,7 @@ def test_environment_settings_are_fail_closed_and_hide_secrets() -> None:
             "GCA_DATA_DIR": "/tmp/gca-service-test",
             "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com,gitlab.example",
             "GCA_GITHUB_TOKEN": "scm-secret",
+            "GCA_DEFAULT_MAX_STEPS": "100",
             "GCA_TOOL_SECRET_GRANTS": (
                 '{"github.com/owner/repo":{"query_metrics":["METRICS_TOKEN"]}}'
             ),
@@ -19,11 +20,38 @@ def test_environment_settings_are_fail_closed_and_hide_secrets() -> None:
     )
 
     assert settings.allowed_repository_hosts == frozenset({"github.com", "gitlab.example"})
+    assert settings.default_max_steps == 100
     assert settings.tool_secret_grants["github.com/owner/repo"]["query_metrics"] == frozenset(
         {"METRICS_TOKEN"}
     )
     assert "api-token-123456" not in repr(settings)
     assert "scm-secret" not in repr(settings)
+
+
+def test_default_max_steps_is_optional_and_bounded() -> None:
+    unset = ServiceSettings.from_environment(
+        {
+            "GCA_API_TOKEN": "api-token-123456",
+            "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+        }
+    )
+    assert unset.default_max_steps is None
+    with pytest.raises(ServiceConfigError, match="GCA_DEFAULT_MAX_STEPS"):
+        ServiceSettings.from_environment(
+            {
+                "GCA_API_TOKEN": "api-token-123456",
+                "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+                "GCA_DEFAULT_MAX_STEPS": "0",
+            }
+        )
+    with pytest.raises(ServiceConfigError, match="GCA_DEFAULT_MAX_STEPS"):
+        ServiceSettings.from_environment(
+            {
+                "GCA_API_TOKEN": "api-token-123456",
+                "GCA_ALLOWED_REPOSITORY_HOSTS": "github.com",
+                "GCA_DEFAULT_MAX_STEPS": "nope",
+            }
+        )
 
 
 def test_settings_require_auth_and_repository_allowlist() -> None:

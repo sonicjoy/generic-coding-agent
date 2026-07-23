@@ -18,6 +18,7 @@ from gca.workspace.prepare import WorkspaceError, validate_repository_spec
 from gca_service.config import ServiceSettings
 from gca_service.routes.common import (
     RequestBodyTooLarge,
+    apply_default_max_steps,
     job_payload,
     read_body,
     service_state,
@@ -68,6 +69,7 @@ async def receive_webhook(request: Request) -> Response:
         spec = normalizer.normalize(context, allowed_projects=allowed_projects)
         if spec is None:
             return Response(status_code=204)
+        spec = apply_default_max_steps(spec, state.settings)
         validate_repository_spec(
             spec.repository,
             allowed_hosts=state.settings.allowed_repository_hosts,

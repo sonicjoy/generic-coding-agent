@@ -16,6 +16,7 @@ from gca.jobs.store import (
 from gca.workspace.prepare import WorkspaceError, validate_repository_spec
 from gca_service.routes.common import (
     RequestBodyTooLarge,
+    apply_default_max_steps,
     job_payload,
     read_json,
     require_auth,
@@ -48,7 +49,7 @@ async def create_run(request: Request) -> JSONResponse:
         max_attempts = payload.pop("max_attempts", 3)
         if isinstance(max_attempts, bool) or not isinstance(max_attempts, int):
             raise ValueError("max_attempts must be an integer")
-        spec = RunSpec.from_dict(payload)
+        spec = apply_default_max_steps(RunSpec.from_dict(payload), state.settings)
         validate_repository_spec(
             spec.repository,
             allowed_hosts=state.settings.allowed_repository_hosts,
