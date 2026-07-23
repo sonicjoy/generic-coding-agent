@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -184,6 +185,11 @@ class IssueSessionIngestor:
                 issue_session_id=session.id,
                 status=GenerationStatus.QUEUED,
                 target_branch=event.target_branch or "main",
+                target_base_sha="",
+                policy_fingerprint=_policy_fingerprint_stub(
+                    event.target_branch or "main",
+                    registration.id,
+                ),
                 branch_name=f"gca/issues/{event.issue_iid}/{uuid.uuid4().hex[:12]}",
                 max_steps=self.generation_max_steps,
             )
@@ -291,6 +297,27 @@ class IssueSessionIngestor:
                 event_id=inbound.id,
             )
 
+        # Issue close requests cooperative cancellation and leaves remote MRs untouched.
+        if event.event_type == "Issue Hook" and event.action == "close" and generation:
+            generation.cancel_requested = True
+            if generation.status not in {
+                GenerationStatus.COMPLETED,
+                GenerationStatus.AWAITING_MERGE,
+            }:
+                generation.status = GenerationStatus.CANCELLED
+            uow.save_generation(generation)
+            uow.mark_generation_jobs_cancelled(generation.id)
+            if generation.status == GenerationStatus.CANCELLED:
+                session.status = GenerationStatus.CANCELLED
+                uow.save_session(session)
+            return IngestResult(
+                status="accepted",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                generation_id=generation.id,
+                event_id=inbound.id,
+            )
+
         if event.command == "/agent status":
             uow.insert_outbound_action(
                 OutboundAction(
@@ -327,6 +354,7 @@ class IssueSessionIngestor:
             generation.cancel_requested = True
             generation.status = GenerationStatus.CANCELLED
             generation = uow.save_generation(generation)
+            uow.mark_generation_jobs_cancelled(generation.id)
             session.status = GenerationStatus.CANCELLED
             uow.save_session(session)
             return IngestResult(
@@ -354,6 +382,33 @@ class IssueSessionIngestor:
                 event_id=inbound.id,
             )
 
+        if event.event_type == "Merge Request Hook" and event.action == "reopen" and generation:
+            if generation.wait_reason == WaitReason.MR_CLOSED and self._has_verified_mr(
+                uow, generation.id
+            ):
+                generation.status = GenerationStatus.AWAITING_MERGE
+                generation.wait_reason = None
+                uow.save_generation(generation)
+                session.status = GenerationStatus.AWAITING_MERGE
+                uow.save_session(session)
+            return IngestResult(
+                status="accepted",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                generation_id=generation.id,
+                event_id=inbound.id,
+            )
+
+        # Pipeline events are wake-ups; authoritative remediation/auto-merge happens in reconciler.
+        if event.event_type == "Pipeline Hook":
+            return IngestResult(
+                status="accepted",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                generation_id=generation.id if generation else None,
+                event_id=inbound.id,
+            )
+
         if generation is None:
             return IngestResult(
                 status="ignored",
@@ -373,6 +428,37 @@ class IssueSessionIngestor:
                 event_id=inbound.id,
             )
 
+        # Authorized /agent run on an already-active generation is a status no-op.
+        if event.command == "/agent run" and generation.status in {
+            GenerationStatus.QUEUED,
+            GenerationStatus.RUNNING,
+            GenerationStatus.PUBLISHING,
+            GenerationStatus.AWAITING_MERGE,
+        }:
+            uow.insert_outbound_action(
+                OutboundAction(
+                    issue_session_id=session.id,
+                    generation_id=generation.id,
+                    kind="issue_note",
+                    effect_key=f"note:{session.id}:status:{event.delivery_id}",
+                    payload={
+                        "template": "status",
+                        "issue_iid": session.issue_iid,
+                        "status": session.status.value,
+                        "wait_reason": generation.wait_reason.value
+                        if generation.wait_reason
+                        else None,
+                    },
+                )
+            )
+            return IngestResult(
+                status="accepted",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                generation_id=generation.id,
+                event_id=inbound.id,
+            )
+
         should_queue = self._should_queue_turn(session, generation, event, decision)
         if not should_queue:
             return IngestResult(
@@ -383,18 +469,28 @@ class IssueSessionIngestor:
                 event_id=inbound.id,
             )
 
+        if uow.project_has_active_coding_turn(session.project_id):
+            # Keep the inbound event unconsumed for a later follow-up turn.
+            return IngestResult(
+                status="accepted",
+                delivery_id=event.delivery_id,
+                issue_session_id=session.id,
+                generation_id=generation.id,
+                event_id=inbound.id,
+            )
+
         if event.command == "/agent run" and generation.status in {
             GenerationStatus.FAILED,
             GenerationStatus.CANCELLED,
         }:
-            if generation.branch_name and generation.status != GenerationStatus.FAILED:
-                pass
             if not self._has_verified_mr(uow, generation.id):
                 generation = uow.insert_generation(
                     IssueGeneration(
                         issue_session_id=session.id,
                         status=GenerationStatus.QUEUED,
                         target_branch=generation.target_branch,
+                        target_base_sha=generation.target_base_sha,
+                        policy_fingerprint=generation.policy_fingerprint,
                         branch_name=f"gca/issues/{session.issue_iid}/{uuid.uuid4().hex[:12]}",
                         max_steps=self.generation_max_steps,
                         summary=generation.summary,
@@ -412,6 +508,7 @@ class IssueSessionIngestor:
             and event.note_body
         ):
             turn_kind = "clarification"
+        pending = uow.unconsumed_inbound_events(session.id)
         turn = uow.insert_turn(
             Turn(
                 issue_session_id=session.id,
@@ -424,7 +521,7 @@ class IssueSessionIngestor:
                 metadata={"inbound_event_id": inbound.id},
             )
         )
-        task = _follow_up_task(session, generation, event)
+        task = _follow_up_task(session, generation, event, pending)
         job = uow.create_turn_job(
             turn=turn,
             session=session,
@@ -432,7 +529,8 @@ class IssueSessionIngestor:
             task=task,
         )
         turn = uow.save_turn(turn)
-        uow.mark_events_consumed([inbound.id], turn.id)
+        consume_ids = [inbound.id] + [item.id for item in pending if item.id != inbound.id]
+        uow.mark_events_consumed(consume_ids, turn.id)
         generation.status = GenerationStatus.QUEUED
         generation.wait_reason = None
         uow.save_generation(generation)
@@ -463,27 +561,44 @@ class IssueSessionIngestor:
                 issue_session_id=session.id,
                 event_id=inbound.id,
             )
-        link = None
-        row = uow.connection.execute(
-            "SELECT data FROM scm_links WHERE generation_id = ?",
-            (generation.id,),
-        ).fetchone()
-        if row is not None:
-            link = ScmLink.from_dict(json.loads(str(row["data"])))
+        # If an older linked MR merged, prefer that generation for completion.
+        matched_generation = generation
         merge_reason = MergeReason.MANAGED
-        if link is not None and link.expected_head_sha and event.pipeline_sha:
-            if event.pipeline_sha != link.expected_head_sha:
-                merge_reason = MergeReason.EXTERNAL_MUTATION
-        generation.status = GenerationStatus.COMPLETED
-        generation.merge_reason = merge_reason
-        generation.wait_reason = None
-        generation.cancel_requested = True
-        uow.save_generation(generation)
+        if event.mr_iid is not None:
+            row = uow.connection.execute(
+                """
+                SELECT data FROM scm_links
+                WHERE target_project_id = ? AND mr_iid = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (event.project_id, event.mr_iid),
+            ).fetchone()
+            if row is not None:
+                link = ScmLink.from_dict(json.loads(str(row["data"])))
+                if link.generation_id != generation.id:
+                    matched_generation = uow.get_generation(link.generation_id)
+                    merge_reason = MergeReason.EXTERNAL_OLD_GENERATION
+                elif link.expected_head_sha and event.pipeline_sha:
+                    if event.pipeline_sha != link.expected_head_sha:
+                        merge_reason = MergeReason.EXTERNAL_MUTATION
+        matched_generation.status = GenerationStatus.COMPLETED
+        matched_generation.merge_reason = merge_reason
+        matched_generation.wait_reason = None
+        matched_generation.cancel_requested = True
+        uow.save_generation(matched_generation)
+        uow.mark_generation_jobs_cancelled(matched_generation.id)
+        if generation.id != matched_generation.id:
+            generation.cancel_requested = True
+            generation.status = GenerationStatus.CANCELLED
+            uow.save_generation(generation)
+            uow.mark_generation_jobs_cancelled(generation.id)
+        session.active_generation_id = matched_generation.id
         session.status = GenerationStatus.COMPLETED
         uow.save_session(session)
         uow.append_event(
             issue_session_id=session.id,
-            generation_id=generation.id,
+            generation_id=matched_generation.id,
             kind="merge",
             payload={"merge_reason": merge_reason.value, "mr_iid": event.mr_iid},
         )
@@ -491,7 +606,7 @@ class IssueSessionIngestor:
             status="accepted",
             delivery_id=event.delivery_id,
             issue_session_id=session.id,
-            generation_id=generation.id,
+            generation_id=matched_generation.id,
             event_id=inbound.id,
         )
 
@@ -580,8 +695,6 @@ class IssueSessionIngestor:
             return False
         if generation.status == GenerationStatus.AWAITING_MERGE:
             return event.command == "/agent fix" and decision.authorized
-        if event.event_type == "Pipeline Hook" and event.pipeline_status == "failed":
-            return generation.status == GenerationStatus.AWAITING_MERGE
         return False
 
     def _has_verified_mr(self, uow, generation_id: str) -> bool:
@@ -628,9 +741,17 @@ class IssueSessionIngestor:
                 "pipeline_id": event.pipeline_id,
                 "pipeline_status": event.pipeline_status,
                 "pipeline_sha": event.pipeline_sha,
+                "failed_jobs": list(event.failed_jobs)[:20],
                 "received_at": utc_now(),
             },
         )
+
+
+def _policy_fingerprint_stub(target_branch: str, registration_id: str) -> str:
+    """Stable placeholder fingerprint until target-base snapshot hashing lands."""
+
+    digest = hashlib.sha256(f"{registration_id}:{target_branch}".encode()).hexdigest()
+    return digest[:32]
 
 
 def _issue_task(title: str, description: str) -> str:
@@ -646,6 +767,7 @@ def _follow_up_task(
     session: IssueSession,
     generation: IssueGeneration,
     event: NormalizedGitLabEvent,
+    pending: list[InboundEvent] | None = None,
 ) -> str:
     parts = [
         "Follow-up turn for an existing GitLab issue session.",
@@ -663,4 +785,12 @@ def _follow_up_task(
         parts.append(
             f"Pipeline {event.pipeline_id} status={event.pipeline_status} sha={event.pipeline_sha}"
         )
+    if pending:
+        notes = []
+        for item in pending:
+            body = str(item.payload.get("note_body") or "").strip()
+            if body:
+                notes.append(body[:2000])
+        if notes:
+            parts.append("Coalesced unconsumed comments:\n" + "\n---\n".join(notes[:10]))
     return "\n\n".join(parts)

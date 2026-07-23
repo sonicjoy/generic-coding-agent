@@ -12,6 +12,8 @@ from gca.integrations.webhooks import (
     WebhookPayloadError,
     WebhookVerificationError,
 )
+from gca.issue_sessions.outbox import HttpGitLabApiClient, RecordingGitLabApiClient
+from gca.issue_sessions.remediation import IssueSessionReconciler
 from gca.jobs.models import JobStatus
 from gca.jobs.store import IdempotencyConflictError
 from gca.workspace.prepare import WorkspaceError, validate_repository_spec
@@ -112,6 +114,30 @@ async def receive_gitlab_webhook(request: Request, *, registration_id: str) -> R
         normalizer.verify(context)
         event = normalizer.normalize(context)
         result = state.issue_ingestor.ingest(event, registration=registration)
+        if (
+            result.status == "accepted"
+            and event.event_type == "Pipeline Hook"
+            and result.issue_session_id
+            and result.generation_id
+        ):
+            if state.settings.gitlab_token:
+                api: RecordingGitLabApiClient | HttpGitLabApiClient = HttpGitLabApiClient(
+                    state.settings.gitlab_token,
+                    api_url=state.settings.gitlab_api_url,
+                )
+            else:
+                api = RecordingGitLabApiClient()
+            IssueSessionReconciler(
+                state.issue_store,
+                api,
+                allow_auto_merge_projects=state.settings.allow_auto_merge_projects,
+            ).handle_pipeline_event(
+                issue_session_id=result.issue_session_id,
+                generation_id=result.generation_id,
+                pipeline_status=event.pipeline_status,
+                pipeline_sha=event.pipeline_sha,
+                failed_jobs=list(event.failed_jobs),
+            )
     except WebhookVerificationError as exc:
         message = str(exc)
         status = 403 if "does not match registration" in message else 401

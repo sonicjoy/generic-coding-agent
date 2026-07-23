@@ -13,9 +13,10 @@ from gca.integrations.github import GitHubScmAdapter
 from gca.integrations.gitlab import GitLabScmAdapter
 from gca.integrations.repository import repository_identity
 from gca.integrations.scm import PublicationController, ScmAdapter
-from gca.issue_sessions.models import Turn
+from gca.issue_sessions.models import GenerationStatus, Turn
 from gca.issue_sessions.outbox import HttpGitLabApiClient, OutboxProcessor, RecordingGitLabApiClient
 from gca.issue_sessions.outcomes import TurnOutcomeApplicator
+from gca.issue_sessions.remediation import IssueSessionReconciler
 from gca.issue_sessions.retention import RetentionJanitor
 from gca.jobs.models import Job, JobStatus, RepositorySpec, utc_now
 from gca.jobs.runner import JobRunner, RuntimeModelLoader
@@ -98,6 +99,11 @@ class ServiceWorker:
         self.model_loader = model_loader
         self.outbox_processor = outbox_processor or _default_outbox(state)
         self._idle_ticks = 0
+        self.reconciler = IssueSessionReconciler(
+            state.issue_store,
+            self.outbox_processor.api,
+            allow_auto_merge_projects=state.settings.allow_auto_merge_projects,
+        )
 
     def run_once(self) -> Job | None:
         """Claim and execute one due job, returning ``None`` when idle."""
@@ -119,6 +125,14 @@ class ServiceWorker:
                 ).run()
             return None
         self._idle_ticks = 0
+
+        if self._is_issue_turn_cancelled(job):
+            job.status = JobStatus.CANCELLED
+            job.result_summary = "cancelled by issue-session fencing"
+            job.lease_owner = None
+            job.lease_expires_at = None
+            self.state.store.save(job)
+            return job
 
         def clone_credentials(repository: RepositorySpec) -> GitCredentials | None:
             host = repository_host(repository.url)
@@ -225,6 +239,24 @@ class ServiceWorker:
                 outcome_kind="needs_human",
             )
         TurnOutcomeApplicator(self.state.issue_store).apply(turn_id=turn_id, result=result)
+
+    def _is_issue_turn_cancelled(self, job: Job) -> bool:
+        generation_id = job.run_spec.labels.get("generation_id")
+        if not generation_id:
+            return False
+        try:
+            generation = self.state.issue_store.get_generation(generation_id)
+        except Exception:
+            return False
+        if generation.cancel_requested or generation.status in {
+            GenerationStatus.CANCELLED,
+            GenerationStatus.COMPLETED,
+        }:
+            return True
+        expected_epoch = job.run_spec.labels.get("lease_epoch")
+        if expected_epoch is not None and str(generation.lease_epoch) != expected_epoch:
+            return True
+        return False
 
 
 def _publisher(state: ServiceState) -> PublicationController | None:

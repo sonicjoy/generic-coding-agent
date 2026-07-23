@@ -11,6 +11,7 @@ from gca.issue_sessions.models import (
     GenerationStatus,
     IssueGeneration,
     IssueSession,
+    ScmLink,
     Turn,
     TurnStatus,
 )
@@ -211,6 +212,7 @@ def test_two_key_auto_merge_schedules_only_when_both_keys_set(tmp_path: Path) ->
     turn.workspace_path = str(workspace)
     with store.unit_of_work() as uow:
         generation.branch_name = f"gca/issues/9/{generation.id[:8]}"
+        generation.metadata = {"auto_merge": True}
         uow.save_generation(generation)
         uow.save_turn(turn)
     TurnOutcomeApplicator(store).apply(
@@ -223,38 +225,71 @@ def test_two_key_auto_merge_schedules_only_when_both_keys_set(tmp_path: Path) ->
         ),
     )
     api = RecordingGitLabApiClient()
-    # Operator key missing: publish only.
-    processor = OutboxProcessor(store, api, git_token="", allow_auto_merge_projects=frozenset())
+    # Publish must not merge immediately; wait for pipeline success + two keys.
+    processor = OutboxProcessor(
+        store,
+        api,
+        git_token="",
+        allow_auto_merge_projects=frozenset({42}),
+    )
     for _ in range(3):
         processor.process_pending()
     assert api.merge_requests
     assert not api.merges
-
-    store2 = IssueSessionStore(tmp_path / "db2.sqlite3")
-    _session2, generation2, turn2 = _seed(store2)
-    turn2.workspace_path = str(workspace)
-    with store2.unit_of_work() as uow:
-        generation2.branch_name = f"gca/issues/9/{generation2.id[:8]}"
-        generation2.metadata = {"auto_merge": True}
-        uow.save_generation(generation2)
-        uow.save_turn(turn2)
-    TurnOutcomeApplicator(store2).apply(
-        turn_id=turn2.id,
-        result=AgentResult(
-            status="completed",
-            steps=1,
-            final_message="Ready",
-            outcome_kind="changes_ready",
-        ),
-    )
-    api2 = RecordingGitLabApiClient()
-    processor2 = OutboxProcessor(
-        store2,
-        api2,
-        git_token="",
+    decision = IssueSessionReconciler(
+        store,
+        api,
         allow_auto_merge_projects=frozenset({42}),
+    ).handle_pipeline_event(
+        issue_session_id=session.id,
+        generation_id=generation.id,
+        pipeline_status="success",
+        pipeline_sha="a" * 40,
     )
-    for _ in range(4):
-        processor2.process_pending()
-    assert api2.merges
-    assert api2.merges[0]["sha"]
+    assert decision.action == "scheduled"
+    for _ in range(2):
+        processor.process_pending()
+    assert api.merges
+    assert api.merges[0]["sha"]
+
+
+def test_auto_merge_denied_without_operator_key(tmp_path: Path) -> None:
+    store = IssueSessionStore(tmp_path / "db.sqlite3")
+    session, generation, turn = _seed(store)
+    with store.unit_of_work() as uow:
+        generation.status = GenerationStatus.AWAITING_MERGE
+        generation.metadata = {"auto_merge": True}
+        uow.save_generation(generation)
+        uow.upsert_scm_link(
+            ScmLink(
+                issue_session_id=session.id,
+                generation_id=generation.id,
+                source_project_id=42,
+                target_project_id=42,
+                branch_name="gca/issues/9/x",
+                target_branch="main",
+                ownership_marker="m",
+                mr_iid=7,
+                expected_head_sha="a" * 40,
+            )
+        )
+    api = RecordingGitLabApiClient()
+    api.merge_requests.append(
+        {
+            "iid": 7,
+            "project_id": 42,
+            "sha": "a" * 40,
+            "detailed_merge_status": "mergeable",
+        }
+    )
+    decision = IssueSessionReconciler(
+        store,
+        api,
+        allow_auto_merge_projects=frozenset(),
+    ).handle_pipeline_event(
+        issue_session_id=session.id,
+        generation_id=generation.id,
+        pipeline_status="success",
+        pipeline_sha="a" * 40,
+    )
+    assert decision.action == "ignored"
