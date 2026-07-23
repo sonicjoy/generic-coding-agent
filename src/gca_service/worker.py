@@ -166,6 +166,15 @@ class ServiceWorker:
             job = self.run_once()
             if job is None:
                 stopper.wait(self.state.settings.poll_seconds)
+                continue
+            # Mirror --once terminal lines so redirected worker logs include
+            # durable outcomes (including last_error) even when JobRunner events
+            # were sparse.
+            if self.on_event is not None:
+                line = f"{job.id} {job.status.value}"
+                if job.last_error:
+                    line = f"{line}: {job.last_error}"
+                self.on_event(line)
 
     def _finalize_issue_turn(self, job: Job) -> None:
         turn_id = job.run_spec.labels.get("turn_id")

@@ -30,7 +30,13 @@ def _worker(args: argparse.Namespace) -> int:
     worker = ServiceWorker(state, on_event=_emit)
     if args.once:
         job = worker.run_once()
-        _emit("idle" if job is None else f"{job.id} {job.status.value}")
+        if job is None:
+            _emit("idle")
+        else:
+            line = f"{job.id} {job.status.value}"
+            if job.last_error:
+                line = f"{line}: {job.last_error}"
+            _emit(line)
         return 0 if job is None or job.status.value == "completed" else 1
     worker.run_forever()
     return 0

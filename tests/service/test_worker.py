@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
 from gca.models import ModelProfile
 from gca.plugins import LoadedPlugins
+from gca.providers.base import ProviderError
 from gca.providers.scripted import ScriptedProvider
 from gca.runtime import RuntimeConfig
 from gca_service.config import ServiceSettings
@@ -96,3 +98,45 @@ def test_worker_periodically_renews_long_running_lease(tmp_path: Path) -> None:
         assert state.store.requeue_expired() == 0
 
     assert state.store.load(job.id).status == JobStatus.RUNNING
+
+
+def test_worker_run_forever_emits_job_errors(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-errors",
+        api_token="api-token-123456",
+        allow_local_repositories=True,
+        lease_seconds=60,
+        poll_seconds=0.05,
+    )
+    state = ServiceState.build(settings)
+    source = _repository(tmp_path)
+    job = state.store.create(
+        RunSpec(
+            task="Fix a typo",
+            repository=RepositorySpec(str(source), ref="main"),
+            workflow="fast",
+            max_steps=1,
+        ),
+        max_attempts=1,
+    )
+    state.queue.enqueue(job.id)
+
+    def fail_models(config: RuntimeConfig) -> LoadedPlugins:
+        raise ProviderError("boom", retryable=False)
+
+    events: list[str] = []
+    stop = threading.Event()
+
+    def on_event(message: str) -> None:
+        events.append(message)
+        if message.startswith(f"{job.id} failed:"):
+            stop.set()
+
+    worker = ServiceWorker(state, on_event=on_event, model_loader=fail_models)
+    thread = threading.Thread(target=worker.run_forever, kwargs={"stop": stop}, daemon=True)
+    thread.start()
+    assert stop.wait(timeout=5), events
+    stop.set()
+    thread.join(timeout=2)
+
+    assert any(event.startswith(f"{job.id} failed:") and "boom" in event for event in events)
