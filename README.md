@@ -507,10 +507,22 @@ registrations JSON for issue sessions; legacy `GCA_GITLAB_WEBHOOK_SECRET` plus
 `GCA_ALLOWED_GITLAB_PROJECTS=group/repo,...` remains for single-registration
 mode and is rejected as ambiguous when multiple registrations are configured.
 The service verifies every delivery before normalization and deduplicates its
-authenticated body even if a replay uses a new delivery ID. Issues enqueue only
-when a maintainer applies the `gca-run` label; customize it with
-`GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL` (or per-registration
-`trigger_label`).
+authenticated body even if a replay uses a new delivery ID. GitHub issue
+deliveries enqueue only when a maintainer applies the `gca-run` label; customize
+it with `GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL` (or
+per-registration `trigger_label`).
+
+GitHub pull-request review deliveries also enqueue into the same `/runs` queue
+when the webhook is subscribed to **Pull request reviews** and **Pull request
+review comments**:
+
+- `pull_request_review` submitted with state `changes_requested`
+- `pull_request_review` or `pull_request_review_comment` whose body contains a
+  line starting with `/agent fix`
+
+Those runs clone the PR **head** ref and publish against the PR **base** ref
+(fetching the base when a shallow single-branch clone omitted it). Ordinary
+approval/comment chatter does not enqueue; use Request changes or `/agent fix`.
 
 Webhook and `POST /runs` submissions may omit `max_steps`. Set
 `GCA_DEFAULT_MAX_STEPS` (1..1000) on the service to apply a default budget to

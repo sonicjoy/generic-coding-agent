@@ -444,9 +444,35 @@ def _existing_base_ref(
     base: str,
     credentials: CredentialBroker,
 ) -> str:
+    """Resolve a local or remote base ref, fetching from origin when needed.
+
+    Shallow ``--single-branch`` clones of a PR head omit ``main``/base locally;
+    publication must fetch that base before opening a change request.
+    """
+
+    if not base.strip() or base.startswith("-") or ".." in base or "\x00" in base:
+        raise PublicationError(f"publication base ref is invalid: {base}")
     if _git_ok(workspace, ["show-ref", "--verify", "--quiet", f"refs/heads/{base}"], credentials):
         return base
     remote = f"origin/{base}"
+    if _git_ok(
+        workspace,
+        ["show-ref", "--verify", "--quiet", f"refs/remotes/{remote}"],
+        credentials,
+    ):
+        return remote
+    # Fetch only the requested base into a remote-tracking ref (no checkout).
+    _git(
+        workspace,
+        [
+            "fetch",
+            "--depth",
+            "1",
+            "origin",
+            f"+refs/heads/{base}:refs/remotes/origin/{base}",
+        ],
+        credentials,
+    )
     if _git_ok(
         workspace,
         ["show-ref", "--verify", "--quiet", f"refs/remotes/{remote}"],
