@@ -1,4 +1,4 @@
-# generic-coding-agent
+# GCA: Generic Coding Agent
 
 A provider-agnostic, pluggable **autonomous coding-agent harness** — the core
 engine you point at a task (or a git issue) so it can reason, edit code, run
