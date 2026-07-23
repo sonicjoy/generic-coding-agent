@@ -18,6 +18,7 @@ from gca.jobs.models import Job
 from gca.repo_config import RepoConfig
 from gca.tools.base import ExecutionPolicy, ToolContext
 from gca.tools.fixed import FixedCommandTool
+from gca.tools.python_source import validate_python_source
 
 _CORE_DENIED_PATHS = (
     ".gca/config.yaml",
@@ -274,8 +275,10 @@ class PublicationController:
         )
         configured_broker = CredentialBroker.from_environment(include_names=configured_names)
         broker = CredentialBroker({**self.credentials.secrets, **configured_broker.secrets})
+        # Always parse-check changed Python before any repo-defined checks or push.
+        _run_python_syntax_gate(workspace, self.credentials)
         if not policy.required_checks:
-            _run_default_python_syntax_check(
+            _run_default_quality_gates(
                 workspace,
                 self.credentials,
                 repo_config,
@@ -328,41 +331,73 @@ def _changed_python_paths(workspace: Path, credentials: CredentialBroker) -> lis
     return sorted(set(paths))
 
 
-def _run_default_python_syntax_check(
+def _run_python_syntax_gate(workspace: Path, credentials: CredentialBroker) -> None:
+    """Fail publication when changed Python files do not parse.
+
+    Runs in-process against the workspace checkout so it does not depend on
+    Python being installed inside the isolation image (the packaged default
+    image is shell/git only).
+    """
+
+    for relative in _changed_python_paths(workspace, credentials):
+        content = (workspace / relative).read_text(encoding="utf-8")
+        error = validate_python_source(relative, content)
+        if error is not None:
+            raise PublicationError(f"publication quality gate failed: {error}")
+
+
+def _run_default_quality_gates(
     workspace: Path,
     credentials: CredentialBroker,
     repo_config: RepoConfig,
     *,
     executor: CommandExecutor | None,
 ) -> None:
-    """Fail publication when changed Python files do not compile.
+    """Run lint/type quality gates when the repo did not configure required_checks.
 
-    Used only when the repository did not configure ``publication.required_checks``.
-    Runs through the isolation executor (never a host-subprocess fallback).
+    Attempts ``ruff check`` and ``python -m mypy`` on changed ``.py`` files through
+    the isolation executor. Missing tools are skipped; installed tools that fail
+    block publication.
     """
 
     paths = _changed_python_paths(workspace, credentials)
-    if not paths:
+    if not paths or executor is None:
         return
-    if executor is None:
-        raise PublicationError(
-            "default Python syntax check requires a command executor when .py files changed"
-        )
-    argv = ["python", "-m", "compileall", "-q", *paths]
-    result = executor.run(
-        argv=argv,
-        cwd=workspace,
-        env=credentials.subprocess_env("hosted"),
-        timeout=min(120, repo_config.runtime.max_tool_timeout),
+    timeout = min(120, repo_config.runtime.max_tool_timeout)
+    env = credentials.subprocess_env("hosted")
+    gates = (
+        ("ruff", ["ruff", "check", *paths]),
+        ("mypy", ["python", "-m", "mypy", "--follow-imports=skip", *paths]),
     )
-    output = credentials.redact(result.output)
-    if result.timed_out:
-        raise PublicationError(f"default Python syntax check timed out:\n{output}")
-    if result.returncode != 0:
-        raise PublicationError(
-            "default Python syntax check failed "
-            f"($ {shlex.join(argv)}, exit {result.returncode}):\n{output.strip()}"
-        )
+    for name, argv in gates:
+        result = executor.run(argv=argv, cwd=workspace, env=env, timeout=timeout)
+        output = credentials.redact(result.output)
+        if result.timed_out:
+            raise PublicationError(f"publication quality gate {name!r} timed out:\n{output}")
+        if _quality_tool_unavailable(result.returncode, output):
+            continue
+        if result.returncode != 0:
+            raise PublicationError(
+                f"publication quality gate {name!r} failed "
+                f"($ {shlex.join(argv)}, exit {result.returncode}):\n{output.strip()}"
+            )
+
+
+def _quality_tool_unavailable(returncode: int, output: str) -> bool:
+    """Return True when a quality-gate binary/module is not installed."""
+
+    if returncode == 127:
+        return True
+    lowered = output.lower()
+    markers = (
+        "not found",
+        "no such file",
+        "no module named",
+        "cannot find the file",
+        "is not recognized",
+        "unable to locate",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _git(

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from gca.executor.fake import FakeExecutor
+from gca.executor.protocol import CommandResult
 from gca.integrations.scm import ChangeRequest, PublicationController, PublicationError
 from gca.jobs.models import Job, PublicationTarget, RepositorySpec, RunSpec
 from gca.repo_config import load_repo_config
@@ -197,7 +198,7 @@ def test_publication_blocks_syntax_error_without_required_checks(tmp_path: Path)
     (source / "broken.py").write_text('\\"""doc"""\nVALUE = 1\n', encoding="utf-8")
     adapter = FakeAdapter()
 
-    with pytest.raises(PublicationError, match="default Python syntax check failed"):
+    with pytest.raises(PublicationError, match="publication quality gate failed"):
         PublicationController({"fake": adapter}).publish(
             _job(repository),
             repository,
@@ -215,16 +216,74 @@ def test_publication_allows_valid_python_without_required_checks(tmp_path: Path)
     source.mkdir()
     (source / "ok.py").write_text('"""ok"""\nVALUE = 1\n', encoding="utf-8")
     adapter = FakeAdapter()
+    # Tools missing in isolation → skipped; syntax gate alone must pass.
+    executor = FakeExecutor(
+        results=[
+            CommandResult(returncode=127, output="ruff: not found\n"),
+            CommandResult(returncode=1, output="No module named mypy\n"),
+        ]
+    )
 
     result = PublicationController({"fake": adapter}).publish(
         _job(repository),
         repository,
         load_repo_config(repository),
-        executor=_executor(),
+        executor=executor,
     )
 
     assert result["change_request_url"] == "https://scm.example/change/1"
     assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
+    assert [call.argv for call in executor.calls] == [
+        ["ruff", "check", "src/ok.py"],
+        ["python", "-m", "mypy", "--follow-imports=skip", "src/ok.py"],
+    ]
+
+
+def test_publication_blocks_when_ruff_fails(tmp_path: Path) -> None:
+    repository = _repository_without_required_checks(tmp_path)
+    source = repository / "src"
+    source.mkdir()
+    (source / "ok.py").write_text('"""ok"""\nVALUE = 1\n', encoding="utf-8")
+    adapter = FakeAdapter()
+    executor = FakeExecutor(
+        results=[
+            CommandResult(returncode=1, output="src/ok.py:2:1: F401 unused import\n"),
+        ]
+    )
+
+    with pytest.raises(PublicationError, match="publication quality gate 'ruff' failed"):
+        PublicationController({"fake": adapter}).publish(
+            _job(repository),
+            repository,
+            load_repo_config(repository),
+            executor=executor,
+        )
+
+    assert adapter.pushed == []
+
+
+def test_publication_blocks_when_mypy_fails(tmp_path: Path) -> None:
+    repository = _repository_without_required_checks(tmp_path)
+    source = repository / "src"
+    source.mkdir()
+    (source / "ok.py").write_text('"""ok"""\nVALUE = 1\n', encoding="utf-8")
+    adapter = FakeAdapter()
+    executor = FakeExecutor(
+        results=[
+            CommandResult(returncode=0, output=""),
+            CommandResult(returncode=1, output="src/ok.py:2: error: Incompatible types\n"),
+        ]
+    )
+
+    with pytest.raises(PublicationError, match="publication quality gate 'mypy' failed"):
+        PublicationController({"fake": adapter}).publish(
+            _job(repository),
+            repository,
+            load_repo_config(repository),
+            executor=executor,
+        )
+
+    assert adapter.pushed == []
 
 
 def test_required_check_failure_blocks_publish(tmp_path: Path) -> None:
