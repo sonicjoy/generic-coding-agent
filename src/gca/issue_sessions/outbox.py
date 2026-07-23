@@ -447,6 +447,16 @@ def render_issue_note(payload: dict[str, Any]) -> str:
     if template == "no_safe_change":
         summary = neutralize_untrusted_markdown(str(payload.get("summary", "")))
         return f"No safe code change was made.\n\n{summary}\n\n{marker}"
+    if template == "budget_exhausted":
+        summary = neutralize_untrusted_markdown(str(payload.get("summary", "")))
+        return (
+            "The agent paused because its step budget was exhausted before finishing.\n\n"
+            f"Progress so far:\n{summary}\n\n"
+            "Resume with a larger budget via `POST /runs/{id}/resume` "
+            "(`max_steps` must exceed the prior budget), or comment `/agent fix` "
+            "to continue.\n\n"
+            f"{marker}"
+        )
     if template == "failed":
         summary = neutralize_untrusted_markdown(str(payload.get("summary", "")))
         return f"The agent turn failed.\n\n{summary}\n\n{marker}"

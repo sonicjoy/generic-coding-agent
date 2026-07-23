@@ -444,7 +444,9 @@ The API exposes:
 - `POST /runs` — authenticated generic `RunSpec` submission; supports
   `Idempotency-Key`.
 - `GET /runs/{id}`, `POST /runs/{id}/cancel`, and
-  `POST /runs/{id}/resume` with a larger `max_steps` budget.
+  `POST /runs/{id}/resume` with a larger `max_steps` budget (required when a
+  run paused on step-budget exhaustion; `max_steps` must exceed the prior
+  budget).
 - `POST /webhooks/github` and legacy `POST /webhooks/gitlab`.
 - `POST /webhooks/gitlab/{registration_id}` — preferred GitLab Issue Agent
   ingress (Issue, Note, Merge Request, and Pipeline events).
@@ -517,6 +519,15 @@ Webhook and `POST /runs` submissions may omit `max_steps`. Set
 those jobs. Explicit `max_steps` on `/runs` (or resume) still wins. When neither
 is set, the worker uses the target repo's `.gca/config.yaml`
 `runtime.max_steps` (default 25).
+
+When a feature-workflow run exhausts its step budget mid-flight, the job
+**pauses** (it does not fail) and no PR/MR is opened for an unfinished diff.
+Implementation cannot consume the entire budget: a small review-step reserve is
+held back so review/publish can still run when implementation finishes within
+its allotment. On exhaustion the durable issue-session path posts an issue note
+with progress so far plus resume instructions. Recover with
+`POST /runs/{id}/resume` (larger `max_steps`) or an authorized `/agent fix`
+comment.
 
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
 `GCA_GITLAB_TOKEN`. Webhook and `POST /runs` requests that include a

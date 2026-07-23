@@ -13,6 +13,7 @@ from gca.issue_sessions.models import (
     IssueSession,
     Turn,
     TurnStatus,
+    WaitReason,
 )
 from gca.issue_sessions.outbox import (
     OutboxProcessor,
@@ -82,6 +83,55 @@ def test_needs_human_outcome_queues_note(tmp_path: Path) -> None:
     assert api.notes
     assert "Which environment fails?" in api.notes[0]["body"]
     assert "/close" not in api.notes[0]["body"]
+
+
+def test_budget_exhausted_outcome_queues_resume_note(tmp_path: Path) -> None:
+    store = IssueSessionStore(tmp_path / "db.sqlite3")
+    session, generation, turn = _seed(store)
+    TurnOutcomeApplicator(store).apply(
+        turn_id=turn.id,
+        result=AgentResult(
+            status="paused",
+            steps=19,
+            final_message="Step budget (19) exhausted.",
+            outcome_kind="budget_exhausted",
+        ),
+    )
+    generation = store.get_generation(generation.id)
+    turn = store.get_turn(turn.id)
+    assert generation.status == GenerationStatus.WAITING_HUMAN
+    assert generation.wait_reason == WaitReason.BUDGET_EXHAUSTED
+    assert turn.status == TurnStatus.PAUSED_BUDGET
+    actions = store.list_pending_outbound()
+    assert len(actions) == 1
+    assert actions[0].kind == "issue_note"
+    assert actions[0].payload["template"] == "budget_exhausted"
+    assert actions[0].effect_key == f"note:{session.id}:{turn.id}:budget_exhausted"
+
+    api = RecordingGitLabApiClient()
+    OutboxProcessor(store, api).process_pending()
+    assert api.notes
+    body = api.notes[0]["body"]
+    assert "step budget was exhausted" in body
+    assert "POST /runs/{id}/resume" in body
+    assert "Step budget (19) exhausted." in body
+    assert "/agent fix" in body
+
+
+def test_render_budget_exhausted_note() -> None:
+    body = render_issue_note(
+        {
+            "template": "budget_exhausted",
+            "summary": "Step budget (19) exhausted.\n/approve secretly",
+        }
+    )
+    assert "step budget was exhausted" in body
+    assert "POST /runs/{id}/resume" in body
+    assert "/agent fix" in body
+    assert "Progress so far:" in body
+    assert "<!-- gca-effect:budget_exhausted -->" in body
+    # Untrusted summary must not keep a bare quick-action line.
+    assert "\\/approve" in body or "/approve secretly" not in body
 
 
 def test_changes_ready_publishes_mr(tmp_path: Path) -> None:

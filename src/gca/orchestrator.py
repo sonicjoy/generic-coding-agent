@@ -36,6 +36,10 @@ from gca.workflows import (
 
 EventHook = Callable[[str], None]
 
+# Steps held back from the implementation phase so review/publish can still run
+# within the same budget (or remain available after a mid-implementation pause).
+REVIEW_STEP_RESERVE = 5
+
 
 class _PhaseStore:
     def __init__(
@@ -439,6 +443,14 @@ class RunCoordinator:
             inflight_tool_call_id=record.inflight_tool_call_id,
         )
         remaining = self.max_steps - parent.step_count
+        # Cap implementation only: leave a small allotment for review when the
+        # overall budget is large enough that the reserve is meaningful.
+        if (
+            phase == "implementation"
+            and workflow.name != WORKFLOW_FAST
+            and self.max_steps > REVIEW_STEP_RESERVE
+        ):
+            remaining = max(1, remaining - REVIEW_STEP_RESERVE)
         phase_limit = child.step_count + remaining
         phase_store = _PhaseStore(parent, record, profile.name, store, model_role=model_role)
         registry = self._phase_tools(phase, workflow=workflow.name)
