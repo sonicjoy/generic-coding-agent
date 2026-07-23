@@ -88,6 +88,20 @@ class TurnOutcomeApplicator:
                 generation.status = GenerationStatus.WAITING_HUMAN
                 generation.wait_reason = WaitReason.BUDGET_EXHAUSTED
                 generation.summary = result.final_message
+                uow.insert_outbound_action(
+                    OutboundAction(
+                        issue_session_id=session.id,
+                        generation_id=generation.id,
+                        turn_id=turn.id,
+                        kind="issue_note",
+                        effect_key=f"note:{session.id}:{turn.id}:budget_exhausted",
+                        payload={
+                            "template": "budget_exhausted",
+                            "issue_iid": session.issue_iid,
+                            "summary": result.final_message,
+                        },
+                    )
+                )
             elif outcome == TurnOutcomeKind.FAILED or result.status == STATUS_FAILED:
                 turn.status = TurnStatus.FAILED
                 generation.status = GenerationStatus.FAILED

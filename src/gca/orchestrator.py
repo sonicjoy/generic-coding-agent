@@ -36,6 +36,11 @@ from gca.workflows import (
 
 EventHook = Callable[[str], None]
 
+# Steps held back from the implementation phase so review/publish can still run
+# within the same budget (or remain available after a mid-implementation pause).
+# RoutingPolicy.review_step_reserve overrides this default when configured.
+REVIEW_STEP_RESERVE = 5
+
 
 class _PhaseStore:
     def __init__(
@@ -315,15 +320,34 @@ class RunCoordinator:
             profile = self._model(model_name)
             self._emit(f"[routing] phase={phase} model={model_name}")
             session.status = STATUS_ACTIVE
+            steps_before = session.step_count
             result, record = self._run_phase(
                 session, store, profile, phase, model_role=spec.model_role
             )
 
             if result.status == STATUS_PAUSED:
+                # Review-only pause with remaining parent budget: auto-resume once
+                # the phase store rolled parent.step_count forward so review can
+                # spend the held-back reserve instead of stranding a finished impl.
+                if (
+                    phase == "review"
+                    and _implementation_artifact(session)
+                    and session.step_count < self.max_steps
+                    and session.step_count > steps_before
+                ):
+                    self._emit(
+                        "[routing] review paused with remaining budget; "
+                        "auto-resuming review within reserve"
+                    )
+                    continue
                 session.status = STATUS_PAUSED
                 session.final_message = result.final_message
                 store.save(session)
-                return self._parent_result(session, result.final_message)
+                return self._parent_result(
+                    session,
+                    result.final_message,
+                    outcome_kind=result.outcome_kind or "budget_exhausted",
+                )
             if result.status == STATUS_FAILED:
                 return self._fail(session, store, result.final_message)
 
@@ -389,7 +413,7 @@ class RunCoordinator:
         message = f"Step budget ({self.max_steps}) exhausted."
         session.final_message = message
         store.save(session)
-        return self._parent_result(session, message)
+        return self._parent_result(session, message, outcome_kind="budget_exhausted")
 
     def _run_phase(
         self,
@@ -439,6 +463,21 @@ class RunCoordinator:
             inflight_tool_call_id=record.inflight_tool_call_id,
         )
         remaining = self.max_steps - parent.step_count
+        # Cap implementation only: leave a small allotment for review when the
+        # overall budget is large enough that the reserve is meaningful.
+        reserve = self.policy.review_step_reserve
+        if reserve < 0:
+            reserve = REVIEW_STEP_RESERVE
+        # Only the first implementation pass is capped. Rework after review must
+        # still be able to spend remaining budget (reserve already protected the
+        # first review transition).
+        if (
+            phase == "implementation"
+            and workflow.name != WORKFLOW_FAST
+            and workflow.review_cycles == 0
+            and self.max_steps > reserve
+        ):
+            remaining = max(1, remaining - reserve)
         phase_limit = child.step_count + remaining
         phase_store = _PhaseStore(parent, record, profile.name, store, model_role=model_role)
         registry = self._phase_tools(phase, workflow=workflow.name)
@@ -538,11 +577,20 @@ class RunCoordinator:
         return session.workflow
 
     @staticmethod
-    def _parent_result(session: Session, message: str) -> AgentResult:
+    def _parent_result(
+        session: Session,
+        message: str,
+        *,
+        outcome_kind: str | None = None,
+    ) -> AgentResult:
+        kind = outcome_kind
+        if kind is None and session.status == STATUS_PAUSED:
+            kind = "budget_exhausted"
         return AgentResult(
             status=session.status,
             steps=session.step_count,
             final_message=message,
+            outcome_kind=kind,
         )
 
     def _fail(self, session: Session, store: SessionStore, message: str) -> AgentResult:
@@ -551,7 +599,17 @@ class RunCoordinator:
         if session.workflow is not None:
             session.workflow.artifacts["error"] = message
         store.save(session)
-        return self._parent_result(session, message)
+        return self._parent_result(session, message, outcome_kind="failed")
+
+
+def _implementation_artifact(session: Session) -> str | None:
+    """Return a non-empty implementation summary if the workflow recorded one."""
+
+    workflow = session.workflow
+    if workflow is None:
+        return None
+    summary = str(workflow.artifacts.get("implementation") or "").strip()
+    return summary or None
 
 
 def _finish_arguments(record: AgentRunRecord) -> dict[str, object]:

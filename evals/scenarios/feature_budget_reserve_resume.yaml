@@ -1,0 +1,51 @@
+id: feature_budget_reserve_resume
+description: >
+  Implementation is capped by the review-step reserve so a modest budget that
+  leaves room for review still pauses mid-implementation; resuming with a
+  larger budget completes review (recoverable path toward a PR).
+task: Implement reserve-aware feature work
+workflow: feature
+# max_steps=8 with REVIEW_STEP_RESERVE=5: planning uses 1 step, then
+# implementation is capped at remaining-reserve = 2, so a 3-step impl pauses
+# before finish. Without the reserve the same script would finish within 8.
+max_steps: 8
+resume_max_steps: 12
+scripts:
+  strong:
+    - tool_calls:
+        - name: finish
+          arguments:
+            plan: Create reserve.txt (and a follow-up file), then review.
+    - tool_calls:
+        - name: finish
+          arguments:
+            verdict: approved
+            summary: Budget reserve resume path verified.
+  fast:
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: reserve.txt
+            content: held
+    - tool_calls:
+        - name: create_file
+          arguments:
+            path: reserve-extra.txt
+            content: extra
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Created reserve files.
+expect:
+  status: completed
+  workflow: feature
+  phases:
+    - planning
+    - implementation
+    - review
+  files:
+    reserve.txt:
+      equals: held
+    reserve-extra.txt:
+      equals: extra
+  final_contains: Budget reserve resume path verified.

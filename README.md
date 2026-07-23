@@ -253,6 +253,9 @@ routing:
     implementation: fast-model
     review: [strong-model, fallback-strong-model]
   max_review_cycles: 2
+  # Steps held back from implementation so review/publish can still finish
+  # (0..50; default 5).
+  review_step_reserve: 5
 
 runtime:
   profile: local
@@ -407,6 +410,7 @@ gca:
   minimum_strength:
     implementation: 2
   max_review_cycles: 2
+  review_step_reserve: 5
   complexity:
     feature_threshold: 3
     large_threshold: 6
@@ -444,7 +448,9 @@ The API exposes:
 - `POST /runs` — authenticated generic `RunSpec` submission; supports
   `Idempotency-Key`.
 - `GET /runs/{id}`, `POST /runs/{id}/cancel`, and
-  `POST /runs/{id}/resume` with a larger `max_steps` budget.
+  `POST /runs/{id}/resume` with a larger `max_steps` budget (required when a
+  run paused on step-budget exhaustion; `max_steps` must exceed the prior
+  budget).
 - `POST /webhooks/github` and legacy `POST /webhooks/gitlab`.
 - `POST /webhooks/gitlab/{registration_id}` — preferred GitLab Issue Agent
   ingress (Issue, Note, Merge Request, and Pipeline events).
@@ -529,6 +535,24 @@ Webhook and `POST /runs` submissions may omit `max_steps`. Set
 those jobs. Explicit `max_steps` on `/runs` (or resume) still wins. When neither
 is set, the worker uses the target repo's `.gca/config.yaml`
 `runtime.max_steps` (default 25).
+
+When a feature-workflow run exhausts its step budget mid-flight, the job
+**pauses** (it does not fail) and no PR/MR is opened for an unfinished diff.
+Implementation cannot consume the entire budget: a small review-step reserve is
+held back so review/publish can still run when implementation finishes within
+its allotment. On exhaustion the durable issue-session path posts an issue note
+with progress so far plus resume instructions. Recover with
+`POST /runs/{id}/resume` (larger `max_steps`) or an authorized `/agent fix`
+comment.
+The reserve size defaults to 5 and is configurable via `review_step_reserve`
+under `gca` frontmatter / routing config (0..50). If review still pauses after
+implementation finished, the orchestrator auto-resumes review once within any
+remaining reserved steps. Generic `/runs` and GitHub webhook jobs record the
+same resume guidance in `last_error` (visible on `GET /runs/{id}`). When
+implementation already produced a summary artifact and publication is
+configured, the runner also opens a **draft** change request on pause so
+operators waiting on `publication.change_request_url` still get a recoverable
+PR/MR; unfinished mid-implementation pauses never publish.
 
 For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
 `GCA_GITLAB_TOKEN`. Webhook and `POST /runs` requests that include a

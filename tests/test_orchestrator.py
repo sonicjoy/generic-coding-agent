@@ -107,8 +107,11 @@ def test_feature_workflow_routes_separate_agents(tmp_path: Path) -> None:
                         "name": "run_command",
                         "arguments": {
                             "command": (
-                                'python -c "import greeting; '
-                                "assert greeting.greet('Ada') == 'Hello, Ada!'\""
+                                "python -c "
+                                + repr(
+                                    "import greeting; "
+                                    "assert greeting.greet('Ada') == 'Hello, Ada!'"
+                                )
                             )
                         },
                     }
@@ -363,3 +366,151 @@ def test_feature_workflow_resumes_current_agent_and_provider_cursor(
         "implementation",
         "review",
     ]
+
+
+def test_feature_implementation_reserves_steps_for_review(tmp_path: Path) -> None:
+    """Implementation must leave a review reserve when max_steps is large enough."""
+
+    # max_steps=8, reserve=5 → after planning (1 step) implementation may use at
+    # most 2 steps (remaining 7 - 5 = 2). A 3-step implementation therefore pauses
+    # before finish; without the reserve the same script would complete within 8.
+    strong_script = [
+        {
+            "tool_calls": [
+                {
+                    "name": "finish",
+                    "arguments": {"plan": "Create reserve.txt, then review it."},
+                }
+            ]
+        },
+        {
+            "tool_calls": [
+                {
+                    "name": "finish",
+                    "arguments": {
+                        "verdict": "approved",
+                        "summary": "Reserve path verified.",
+                    },
+                }
+            ]
+        },
+    ]
+    fast_script = [
+        {
+            "tool_calls": [
+                {
+                    "name": "create_file",
+                    "arguments": {"path": "reserve.txt", "content": "held"},
+                }
+            ]
+        },
+        {
+            "tool_calls": [
+                {
+                    "name": "create_file",
+                    "arguments": {"path": "reserve-extra.txt", "content": "extra"},
+                }
+            ]
+        },
+        {
+            "tool_calls": [
+                {
+                    "name": "finish",
+                    "arguments": {"summary": "Created reserve files."},
+                }
+            ]
+        },
+    ]
+    store = SessionStore(tmp_path / "sessions")
+    session = store.create("Implement with step reserve")
+    config = RuntimeConfig(
+        workspace=tmp_path,
+        sessions_dir=tmp_path / "sessions",
+        max_steps=8,
+        workflow="feature",
+    )
+
+    first = create_coordinator(
+        config,
+        _registry(
+            RecordingScriptedProvider.from_script(fast_script),
+            RecordingScriptedProvider.from_script(strong_script),
+        ),
+    ).run(session, store)
+
+    assert first.status == "paused"
+    assert first.outcome_kind == "budget_exhausted"
+    assert (tmp_path / "reserve.txt").exists()
+    assert [run.phase for run in session.agent_runs] == ["planning", "implementation"]
+    assert session.workflow is not None
+    assert session.workflow.phase == "implementation"
+    # Implementation must not have finished (finish is the 3rd step).
+    assert session.workflow.artifacts.get("implementation") in (None, "")
+
+    reloaded = store.load(session.id)
+    resumed = create_coordinator(
+        RuntimeConfig(
+            workspace=tmp_path,
+            sessions_dir=tmp_path / "sessions",
+            max_steps=12,
+            workflow="feature",
+        ),
+        _registry(
+            RecordingScriptedProvider.from_script(fast_script),
+            RecordingScriptedProvider.from_script(strong_script),
+        ),
+    ).run(reloaded, store)
+
+    assert resumed.status == "completed"
+    assert resumed.final_message == "Reserve path verified."
+    assert [run.phase for run in reloaded.agent_runs] == [
+        "planning",
+        "implementation",
+        "review",
+    ]
+    assert (tmp_path / "reserve-extra.txt").read_text(encoding="utf-8") == "extra"
+
+
+def test_feature_tiny_budget_does_not_apply_review_reserve(tmp_path: Path) -> None:
+    """When max_steps <= REVIEW_STEP_RESERVE the reserve is a no-op."""
+
+    strong = RecordingScriptedProvider.from_script(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "name": "finish",
+                        "arguments": {"plan": "Create tiny.txt later."},
+                    }
+                ]
+            }
+        ]
+    )
+    fast = RecordingScriptedProvider.from_script(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "name": "finish",
+                        "arguments": {"summary": "Should not run within one step."},
+                    }
+                ]
+            }
+        ]
+    )
+    store = SessionStore(tmp_path / "sessions")
+    session = store.create("Tiny budget feature")
+    result = create_coordinator(
+        RuntimeConfig(
+            workspace=tmp_path,
+            sessions_dir=tmp_path / "sessions",
+            max_steps=1,
+            workflow="feature",
+        ),
+        _registry(fast, strong),
+    ).run(session, store)
+
+    assert result.status == "paused"
+    assert result.outcome_kind == "budget_exhausted"
+    assert "Step budget" in (result.final_message or "")
+    assert [run.phase for run in session.agent_runs] == ["planning"]
