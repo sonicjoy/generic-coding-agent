@@ -11,7 +11,8 @@ from gca.credentials import CredentialBroker
 from gca.executor.protocol import CommandExecutor
 from gca.models import ModelProfile, ModelRegistry
 from gca.personas import PersonaSet
-from gca.providers.base import Message
+from gca.providers.base import LLMProvider, Message
+from gca.providers.fallback import FallbackProvider
 from gca.repo_config import RepoConfig
 from gca.routing import WORKFLOW_FAST, RoutingPolicy
 from gca.session import (
@@ -55,6 +56,16 @@ class _PhaseStore:
         self.record.step_count = child.step_count
         self.record.final_message = child.final_message
         self.record.inflight_tool_call_id = child.inflight_tool_call_id
+        if child.active_model and child.active_model != self.model_name:
+            previous = self.model_name
+            self.model_name = child.active_model
+            self.record.model = child.active_model
+            self.parent.active_model = child.active_model
+            workflow = self.parent.workflow
+            if workflow is not None:
+                for role, bound in list(workflow.model_bindings.items()):
+                    if bound == previous:
+                        workflow.model_bindings[role] = child.active_model
         workflow = self.parent.workflow
         if workflow is not None:
             workflow.provider_states[self.model_name] = dict(child.provider_state)
@@ -167,15 +178,43 @@ class RunCoordinator:
     def _bind_models(self, workflow_name: str, complexity: str) -> dict[str, str]:
         bindings: dict[str, str] = {}
         for phase in get_workflow(workflow_name).phases:
+            preferences = self.policy.preferred_models(phase.model_role)
             profile = self.models.select(
                 capability=phase.capability,
                 strategy=phase.strategy,
                 min_strength=self.policy.min_strength(phase.model_role, complexity),
-                preferred=self.policy.preferred_model(phase.model_role),
+                preferred=preferences or None,
                 additional_capabilities=frozenset({"tool_use"}),
             )
             bindings[phase.model_role] = profile.name
         return bindings
+
+    def _provider_for_role(self, role: str, primary: ModelProfile) -> LLMProvider:
+        """Return primary provider, wrapped with ordered fallbacks when configured."""
+
+        chain: list[tuple[str, LLMProvider]] = []
+        seen: set[str] = set()
+        for name in self.policy.preferred_models(role):
+            profile = self.models.get(name)
+            if profile is None or name in seen:
+                continue
+            seen.add(name)
+            chain.append((name, profile.provider))
+        if not chain:
+            return primary.provider
+        if chain[0][0] != primary.name:
+            chain = [
+                (primary.name, primary.provider),
+                *[item for item in chain if item[0] != primary.name],
+            ]
+        if len(chain) == 1:
+            return chain[0][1]
+        return FallbackProvider(
+            chain,
+            on_failover=lambda old, new, err: self._emit(
+                f"[routing] failover model={old}->{new} reason={err}"
+            ),
+        )
 
     def _check_resume_configuration(self, session: Session) -> None:
         workflow = session.workflow
@@ -220,7 +259,7 @@ class RunCoordinator:
         self._emit(f"[routing] phase=execute model={model_name}")
         registry = self._phase_tools("execute", workflow=workflow.name)
         result = Agent(
-            provider=profile.provider,
+            provider=self._provider_for_role("fast", profile),
             registry=registry,
             session=session,
             context=self._tool_context("execute", registry),
@@ -228,7 +267,9 @@ class RunCoordinator:
             config=AgentConfig(max_steps=self.max_steps),
             on_event=self.on_event,
         ).run()
-        workflow.provider_states[model_name] = dict(session.provider_state)
+        active = session.active_model or model_name
+        workflow.model_bindings["fast"] = active
+        workflow.provider_states[active] = dict(session.provider_state)
         workflow.artifacts["final"] = result.final_message
         store.save(session)
         return result
@@ -246,7 +287,9 @@ class RunCoordinator:
             profile = self._model(model_name)
             self._emit(f"[routing] phase={phase} model={model_name}")
             session.status = STATUS_ACTIVE
-            result, record = self._run_phase(session, store, profile, phase)
+            result, record = self._run_phase(
+                session, store, profile, phase, model_role=spec.model_role
+            )
 
             if result.status == STATUS_PAUSED:
                 session.status = STATUS_PAUSED
@@ -326,6 +369,8 @@ class RunCoordinator:
         store: SessionStore,
         profile: ModelProfile,
         phase: str,
+        *,
+        model_role: str,
     ) -> tuple[AgentResult, AgentRunRecord]:
         workflow = self._workflow(parent)
         parent.active_model = profile.name
@@ -370,7 +415,7 @@ class RunCoordinator:
         phase_store = _PhaseStore(parent, record, profile.name, store)
         registry = self._phase_tools(phase, workflow=workflow.name)
         result = Agent(
-            provider=profile.provider,
+            provider=self._provider_for_role(model_role, profile),
             registry=registry,
             session=child,
             context=self._tool_context(phase, registry),

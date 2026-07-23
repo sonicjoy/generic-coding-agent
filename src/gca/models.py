@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from gca.providers.base import LLMProvider
@@ -104,13 +105,15 @@ class ModelRegistry:
         capability: str,
         strategy: str,
         min_strength: int = 1,
-        preferred: str | None = None,
+        preferred: str | Sequence[str] | None = None,
         additional_capabilities: frozenset[str] = frozenset(),
     ) -> ModelProfile:
         """Select a model for a role.
 
-        An explicit ``preferred`` name wins. Otherwise ``strongest`` maximizes
-        strength, while ``efficient`` favors lower cost and then higher speed.
+        An explicit ``preferred`` name (or ordered preference list) wins.
+        Later names in a list are tried only when earlier ones are unavailable
+        or unsuitable. Otherwise ``strongest`` maximizes strength, while
+        ``efficient`` favors lower cost and then higher speed.
         """
 
         if strategy not in _VALID_STRATEGIES:
@@ -120,26 +123,21 @@ class ModelRegistry:
 
         required_capabilities = {capability, *additional_capabilities}
 
-        if preferred:
-            profile = self.get(preferred)
-            if profile is None:
-                available = ", ".join(self.names()) or "none"
-                raise ModelSelectionError(
-                    f"unknown preferred model '{preferred}' (available: {available})"
-                )
-            missing = sorted(
-                required for required in required_capabilities if not profile.supports(required)
-            )
-            if missing:
-                raise ModelSelectionError(
-                    f"model '{preferred}' does not support: {', '.join(missing)}"
-                )
-            if profile.strength < min_strength:
-                raise ModelSelectionError(
-                    f"model '{preferred}' has strength {profile.strength}, below "
-                    f"the required minimum {min_strength}"
-                )
-            return profile
+        if preferred is not None:
+            names = (preferred,) if isinstance(preferred, str) else tuple(preferred)
+            if not names:
+                raise ModelSelectionError("preferred model list must not be empty")
+            errors: list[str] = []
+            for name in names:
+                try:
+                    return self._select_preferred(
+                        name,
+                        required_capabilities=required_capabilities,
+                        min_strength=min_strength,
+                    )
+                except ModelSelectionError as exc:
+                    errors.append(str(exc))
+            raise ModelSelectionError("; ".join(errors))
 
         candidates = [
             profile
@@ -174,6 +172,31 @@ class ModelRegistry:
                 profile.name,
             ),
         )
+
+    def _select_preferred(
+        self,
+        preferred: str,
+        *,
+        required_capabilities: set[str],
+        min_strength: int,
+    ) -> ModelProfile:
+        profile = self.get(preferred)
+        if profile is None:
+            available = ", ".join(self.names()) or "none"
+            raise ModelSelectionError(
+                f"unknown preferred model '{preferred}' (available: {available})"
+            )
+        missing = sorted(
+            required for required in required_capabilities if not profile.supports(required)
+        )
+        if missing:
+            raise ModelSelectionError(f"model '{preferred}' does not support: {', '.join(missing)}")
+        if profile.strength < min_strength:
+            raise ModelSelectionError(
+                f"model '{preferred}' has strength {profile.strength}, below "
+                f"the required minimum {min_strength}"
+            )
+        return profile
 
     def fingerprint(self) -> str:
         """Return a stable fingerprint of registered routing metadata."""

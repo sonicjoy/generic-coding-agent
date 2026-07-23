@@ -68,6 +68,35 @@ def test_explicit_preference_wins_and_validates_capability() -> None:
         )
 
 
+def test_preferred_list_falls_back_when_primary_unavailable() -> None:
+    registry = ModelRegistry()
+    registry.register(ModelProfile("opus", StubProvider(), strength=5))
+
+    assert (
+        registry.select(
+            capability="planning",
+            strategy="strongest",
+            preferred=["fable", "opus"],
+        ).name
+        == "opus"
+    )
+
+
+def test_preferred_list_keeps_primary_when_available() -> None:
+    registry = ModelRegistry()
+    registry.register(ModelProfile("fable", StubProvider(), strength=5))
+    registry.register(ModelProfile("opus", StubProvider(), strength=5))
+
+    assert (
+        registry.select(
+            capability="planning",
+            strategy="strongest",
+            preferred=["fable", "opus"],
+        ).name
+        == "fable"
+    )
+
+
 def test_profile_scores_are_one_to_five() -> None:
     with pytest.raises(ValueError, match="strength"):
         ModelProfile("invalid", StubProvider(), strength=6)

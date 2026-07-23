@@ -248,9 +248,10 @@ routing:
   workflow: auto
   models:
     fast: fast-model
-    planning: strong-model
+    # A list is primary-then-fallback order (runtime failover on retryable errors).
+    planning: [strong-model, fallback-strong-model]
     implementation: fast-model
-    review: strong-model
+    review: [strong-model, fallback-strong-model]
   max_review_cycles: 2
 
 runtime:
@@ -400,9 +401,9 @@ gca:
   workflow: auto
   models:
     fast: grok-4.5
-    planning: claude-opus-4.8
+    planning: [claude-fable-5, claude-opus-4.8]
     implementation: grok-4.5
-    review: claude-opus-4.8
+    review: [claude-fable-5, claude-opus-4.8]
   minimum_strength:
     implementation: 2
   max_review_cycles: 2
@@ -411,6 +412,10 @@ gca:
     large_threshold: 6
 ---
 ```
+
+Model values may be a single registered name or an ordered list. The first
+usable model is bound for the role; later names are runtime fallbacks when the
+active provider raises a retryable error (timeouts, 5xx, rate limits).
 
 Nested `AGENTS.md`/`CLAUDE.md` configuration is merged root-first, so deeper
 files override individual routing values. Markdown bodies remain part of every

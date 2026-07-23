@@ -46,10 +46,31 @@ def test_policy_parses_overrides() -> None:
 
     assert policy.workflow == "feature"
     assert policy.preferred_model("planning") == "top"
+    assert policy.preferred_models("planning") == ("top",)
     assert policy.min_strength("implementation", "medium") == 2
     assert policy.min_strength("implementation", "large") == 3
     assert policy.max_review_cycles == 3
     assert policy.choose_workflow("auto", "fast") == "fast"
+
+
+def test_policy_parses_model_fallback_lists() -> None:
+    policy = RoutingPolicy.from_mapping(
+        {
+            "models": {
+                "planning": ["claude-fable-5", "claude-opus-4.8"],
+                "review": ["claude-fable-5", "claude-opus-4.8"],
+            }
+        }
+    )
+
+    assert policy.preferred_models("planning") == ("claude-fable-5", "claude-opus-4.8")
+    assert policy.preferred_model("planning") == "claude-fable-5"
+    assert policy.preferred_models("review") == ("claude-fable-5", "claude-opus-4.8")
+
+
+def test_policy_rejects_duplicate_model_fallback() -> None:
+    with pytest.raises(RoutingConfigError, match="duplicate model"):
+        RoutingPolicy.from_mapping({"models": {"planning": ["a", "a"]}})
 
 
 def test_policy_rejects_unknown_model_role() -> None:
