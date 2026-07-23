@@ -83,6 +83,8 @@ def test_github_issue_webhook_verifies_and_normalizes() -> None:
     assert spec.labels["issue_title"] == "Fix null metadata"
     assert spec.publication is not None and spec.publication.provider == "github"
     assert "untrusted request data" in spec.task
+    assert "Keep the change set minimal" in spec.task
+    assert "Do not refactor" in spec.task
 
 
 def test_github_webhook_rejects_bad_signature() -> None:
