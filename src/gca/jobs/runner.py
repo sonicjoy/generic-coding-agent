@@ -300,10 +300,27 @@ class JobRunner:
             return
         transition_job(job, JobStatus.PUBLISHING)
         self.store.save(job)
-        self._emit(f"[job] {job.id} publishing")
+        provider = job.run_spec.publication.provider
+        self._emit(
+            f"[job] event=publish_start job_id={job.id} provider={provider} "
+            f"session_id={job.session_id or ''}"
+        )
         self._heartbeat(job)
-        job.publication = dict(
-            self.publisher.publish(job, repository, repo_config, executor=executor)
+        try:
+            job.publication = dict(
+                self.publisher.publish(job, repository, repo_config, executor=executor)
+            )
+        except PublicationError as exc:
+            detail = self.credentials.redact(str(exc))
+            self._emit(
+                f"[job] event=publish_failure job_id={job.id} provider={provider} "
+                f"error={detail}"
+            )
+            raise
+        url = str(job.publication.get("change_request_url") or "").strip()
+        self._emit(
+            f"[job] event=publish_success job_id={job.id} provider={provider} "
+            f"change_request_url={url or 'none'}"
         )
         transition_job(job, JobStatus.COMPLETED)
         self.store.save(job)
@@ -344,7 +361,10 @@ class JobRunner:
 
     def _on_agent_event(self, job: Job, message: str) -> None:
         self._heartbeat(job)
-        self._emit(message)
+        if message.startswith("[routing]"):
+            self._emit(f"[job] job_id={job.id} {message}")
+        else:
+            self._emit(message)
 
 
 def _implementation_summary(session: Session) -> str | None:

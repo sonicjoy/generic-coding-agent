@@ -22,6 +22,7 @@ from gca.jobs.runner import JobRunner, RuntimeModelLoader
 from gca.jobs.store import JobConcurrencyError
 from gca.session import SessionStore
 from gca.workspace.prepare import repository_host
+from gca_service.events import structured_event
 from gca_service.state import ServiceState
 
 EventSink = Callable[[str], None]
@@ -119,6 +120,21 @@ class ServiceWorker:
                 ).run()
             return None
         self._idle_ticks = 0
+        self._emit(
+            structured_event(
+                "worker",
+                "claim",
+                job_id=job.id,
+                attempt=job.attempt,
+                max_attempts=job.max_attempts,
+                max_steps=job.run_spec.max_steps,
+                workflow=job.run_spec.workflow,
+                lease_owner=settings.worker_id,
+                lease_seconds=settings.lease_seconds,
+                issue_id=job.run_spec.labels.get("issue_id"),
+                source=job.run_spec.labels.get("source"),
+            )
+        )
 
         def clone_credentials(repository: RepositorySpec) -> GitCredentials | None:
             host = repository_host(repository.url)
@@ -156,7 +172,21 @@ class ServiceWorker:
             self._finalize_issue_turn(result)
             self.outbox_processor.process_pending()
             lease.check()
+            self._emit(
+                structured_event(
+                    "worker",
+                    "job_done",
+                    job_id=result.id,
+                    status=result.status.value,
+                    session_id=result.session_id,
+                    last_error=result.last_error,
+                )
+            )
             return result
+
+    def _emit(self, message: str) -> None:
+        if self.on_event is not None:
+            self.on_event(message)
 
     def run_forever(self, stop: threading.Event | None = None) -> None:
         """Poll until ``stop`` is set."""

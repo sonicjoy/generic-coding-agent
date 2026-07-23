@@ -8,6 +8,7 @@ import uvicorn
 
 from gca_service.app import create_app
 from gca_service.config import ServiceSettings
+from gca_service.events import structured_event
 from gca_service.state import ServiceState
 from gca_service.worker import ServiceWorker
 
@@ -26,7 +27,26 @@ def _emit(message: str) -> None:
 
 def _worker(args: argparse.Namespace) -> int:
     settings = ServiceSettings.from_environment()
+    _emit(
+        structured_event(
+            "worker",
+            "start",
+            worker_id=settings.worker_id,
+            data_dir=settings.data_dir,
+            lease_seconds=settings.lease_seconds,
+            poll_seconds=settings.poll_seconds,
+            once=bool(args.once),
+        )
+    )
     state = ServiceState.build(settings)
+    _emit(
+        structured_event(
+            "worker",
+            "store_ready",
+            worker_id=settings.worker_id,
+            data_dir=settings.data_dir,
+        )
+    )
     worker = ServiceWorker(state, on_event=_emit)
     if args.once:
         job = worker.run_once()
