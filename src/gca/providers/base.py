@@ -8,10 +8,11 @@ inputs into its own API calls and translate the response back into an
 
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+from gca.providers.tool_arguments import parse_tool_arguments
 
 
 class ProviderError(RuntimeError):
@@ -38,26 +39,8 @@ class ToolCall:
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
-            arguments=_coerce_tool_arguments(data.get("arguments", {})),
+            arguments=parse_tool_arguments(data.get("arguments", {})),
         )
-
-
-def _coerce_tool_arguments(value: Any) -> dict[str, Any]:
-    """Normalize tool arguments the same way live providers do.
-
-    Session JSON and some backends may store ``arguments`` as a JSON string.
-    Parsing once here avoids treating that string as a opaque blob on resume.
-    """
-
-    arguments: Any = value
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments) if arguments.strip() else {}
-        except json.JSONDecodeError:
-            arguments = {"_raw": arguments}
-    if not isinstance(arguments, dict):
-        return {"_raw": arguments}
-    return dict(arguments)
 
 
 @dataclass

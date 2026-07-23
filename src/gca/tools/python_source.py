@@ -22,7 +22,7 @@ def validate_python_source(path: str, content: str) -> str | None:
         if exc.lineno is not None:
             detail = f"{detail} (line {exc.lineno})"
         hint = ""
-        if _looks_json_over_escaped(content):
+        if looks_json_over_escaped(content):
             hint = (
                 " Content looks JSON-over-escaped (literal backslash-quotes). "
                 "Send normal Python source in tool arguments, not an escaped JSON string."
@@ -31,8 +31,8 @@ def validate_python_source(path: str, content: str) -> str | None:
     return None
 
 
-def _looks_json_over_escaped(content: str) -> bool:
-    """Detect the common model failure mode that leaves literal ``\\\"`` in files."""
+def looks_json_over_escaped(content: str) -> bool:
+    """Return True when ``content`` appears to contain JSON-over-escaped quotes."""
 
     return (
         '\\"' in content
