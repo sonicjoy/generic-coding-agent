@@ -174,8 +174,7 @@ def parse_unified_diff(diff: str) -> list[FilePatch]:
     flush_hunk()
     if not patches:
         raise PatchError(
-            "no file headers found in diff "
-            "(expected lines starting with '--- ' and '+++ ')",
+            "no file headers found in diff (expected lines starting with '--- ' and '+++ ')",
             hint=_EXAMPLE_ENVELOPE,
         )
     return patches

@@ -324,8 +324,7 @@ class JobRunner:
         except PublicationError as exc:
             detail = self.credentials.redact(str(exc))
             self._emit(
-                f"[job] event=publish_failure job_id={job.id} provider={provider} "
-                f"error={detail}"
+                f"[job] event=publish_failure job_id={job.id} provider={provider} error={detail}"
             )
             raise
         url = str(job.publication.get("change_request_url") or "").strip()
