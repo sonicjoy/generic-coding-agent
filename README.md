@@ -648,9 +648,13 @@ On a VM or container host, run the worker with:
 - Optional `GCA_DOCKER_DISABLE_RESOURCE_LIMITS=1` on nested cgroupv2 hosts that
   reject `--cpus`/`--memory` (the executor also retries once without limits)
 
-Target repos may optionally add `Dockerfile.agent` (or `environment.dockerfile`
-in `.gca/config.yaml` / `agent/config.yaml`) for dependency parity. Without it,
-GCA uses a packaged default isolation image (sandbox only).
+Target repos should add `Dockerfile.agent` (or `environment.dockerfile` in
+`.gca/config.yaml` / `agent/config.yaml`) when `run_command` needs a language
+SDK, package manager, or project tooling. See
+`examples/templates/Dockerfile.agent` for a Python starting point. Without a
+repo image, GCA uses a packaged default isolation image
+(`src/gca/executor/default.Dockerfile`: bash/git/curl only — no Python/Node).
+Put language SDKs in the repo isolation image, not the GCA host image.
 
 ## Usage
 
@@ -662,8 +666,12 @@ setup flow (examples use mmmapper). Short examples:
 gca run "Fix a typo in README"
 gca run "Add search history" --workflow feature
 
-# Offline demo with the scripted provider
-gca run "Create hello.py" --script examples/demo_script.json --plugins examples/plugins
+# Offline demo with the scripted provider (needs Docker for run_command).
+# Seed Dockerfile.agent so isolation has Python — the default image does not.
+mkdir -p /tmp/gca_demo
+cp examples/templates/Dockerfile.agent /tmp/gca_demo/
+gca run "Add a greeting feature to this project" --workspace /tmp/gca_demo \
+  --skills examples/skills --script examples/demo_script.json
 ```
 
 ## Development
