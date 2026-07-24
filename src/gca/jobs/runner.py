@@ -283,9 +283,13 @@ class JobRunner:
                         publication=replace(original, draft=True),
                     )
                     try:
-                        job.publication = dict(
+                        prior = dict(job.publication)
+                        published = dict(
                             self.publisher.publish(job, repository, repo_config, executor=executor)
                         )
+                        if "linked_issue" in prior and "linked_issue" not in published:
+                            published["linked_issue"] = prior["linked_issue"]
+                        job.publication = published
                     finally:
                         # Restore the operator-requested draft flag for resume/complete.
                         job.run_spec = replace(job.run_spec, publication=original)
@@ -335,8 +339,9 @@ class JobRunner:
             f"session_id={job.session_id or ''}"
         )
         self._heartbeat(job)
+        prior = dict(job.publication or {})
         try:
-            job.publication = dict(
+            published = dict(
                 self.publisher.publish(job, repository, repo_config, executor=executor)
             )
         except PublicationError as exc:
@@ -345,6 +350,10 @@ class JobRunner:
                 f"[job] event=publish_failure job_id={job.id} provider={provider} error={detail}"
             )
             raise
+        # Keep early-link metadata from prepare_working_branch.
+        if "linked_issue" in prior and "linked_issue" not in published:
+            published["linked_issue"] = prior["linked_issue"]
+        job.publication = published
         url = str(job.publication.get("change_request_url") or "").strip()
         self._emit(
             f"[job] event=publish_success job_id={job.id} provider={provider} "

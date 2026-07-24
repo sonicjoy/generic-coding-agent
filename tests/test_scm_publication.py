@@ -146,6 +146,7 @@ def test_controller_prepares_issue_working_branch(tmp_path: Path) -> None:
     adapter = FakeAdapter()
     job = _job(repository)
     job.run_spec.labels["issue_id"] = "12"
+    job.run_spec.labels["source"] = "issues.labeled"
 
     result = PublicationController({"fake": adapter}).prepare_working_branch(job, repository)
 
@@ -155,6 +156,20 @@ def test_controller_prepares_issue_working_branch(tmp_path: Path) -> None:
     assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
     assert adapter.linked == [("gca/aaaaaaaaaaaa", "12", result["commit_sha"])]
     assert _git(repository, "branch", "--show-current") == "gca/aaaaaaaaaaaa"
+
+
+def test_controller_skips_working_branch_for_pr_review_jobs(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    adapter = FakeAdapter()
+    job = _job(repository)
+    job.run_spec.labels["issue_id"] = "43"
+    job.run_spec.labels["source"] = "pull_request_review.changes_requested"
+
+    result = PublicationController({"fake": adapter}).prepare_working_branch(job, repository)
+
+    assert result is None
+    assert adapter.pushed == []
+    assert adapter.linked == []
 
 
 def test_controller_skips_working_branch_without_issue_id(tmp_path: Path) -> None:

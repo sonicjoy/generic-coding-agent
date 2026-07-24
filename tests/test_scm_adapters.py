@@ -85,6 +85,8 @@ def test_github_adapter_links_branch_to_issue(monkeypatch: object) -> None:
 
     assert linked is True
     assert calls[1] is not None
+    mutation = str(calls[1]["query"])
+    assert mutation.count("{") == mutation.count("}")
     assert calls[1]["variables"]["input"] == {
         "issueId": "I_123",
         "name": "gca/job",

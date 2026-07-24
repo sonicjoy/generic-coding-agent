@@ -258,8 +258,11 @@ class PublicationController:
         """Create and push the issue-linked working branch before the agent runs."""
 
         target = job.run_spec.publication
-        issue_id = str(job.run_spec.labels.get("issue_id", "")).strip()
-        if target is None or not issue_id:
+        labels = job.run_spec.labels
+        issue_id = str(labels.get("issue_id", "")).strip()
+        # Only labeled-issue jobs (not PR review /agent fix runs that also carry
+        # an issue/PR number under issue_id).
+        if target is None or not issue_id or labels.get("source") != "issues.labeled":
             return None
         adapter = self.adapters.get(target.provider)
         if adapter is None:
@@ -267,7 +270,17 @@ class PublicationController:
         if not adapter.supports_repository(job.run_spec.repository.url):
             raise PublicationError(f"{target.provider} adapter does not match repository host")
         branch = _branch_name(target.branch_prefix, job.id)
-        _checkout_publication_branch(workspace, branch, target.base_ref, self.credentials)
+        # Create from the already-cloned HEAD; do not re-fetch publication.base_ref
+        # (shallow PR-head clones may not have that ref yet).
+        _git(workspace, ["check-ref-format", "--branch", branch], self.credentials)
+        if _git_ok(
+            workspace,
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            self.credentials,
+        ):
+            _git(workspace, ["checkout", branch], self.credentials)
+        else:
+            _git(workspace, ["checkout", "-b", branch], self.credentials)
         oid = _git(workspace, ["rev-parse", "HEAD"], self.credentials).strip()
         linked = False
         try:

@@ -111,7 +111,6 @@ class GitHubScmAdapter:
                     "mutation($input:CreateLinkedBranchInput!){"
                     "createLinkedBranch(input:$input){linkedBranch{ref{name}}}"
                     "}"
-                    "}"
                 ),
                 "variables": {
                     "input": {

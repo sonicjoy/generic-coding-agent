@@ -50,7 +50,8 @@ class _FakePublisher:
 
     def prepare_working_branch(self, job: Job, workspace: Path) -> dict[str, object] | None:
         _ = workspace
-        if not job.run_spec.labels.get("issue_id"):
+        labels = job.run_spec.labels
+        if not labels.get("issue_id") or labels.get("source") != "issues.labeled":
             return None
         self.prepared.append(job)
         return {
@@ -169,7 +170,7 @@ def test_job_runner_prepares_issue_branch_before_agent(tmp_path: Path) -> None:
             workflow="fast",
             max_steps=2,
             publication=PublicationTarget(provider="fake", base_ref="main"),
-            labels={"issue_id": "123"},
+            labels={"issue_id": "123", "source": "issues.labeled"},
         )
     )
     queue.enqueue(created.id)
@@ -205,6 +206,8 @@ def test_job_runner_prepares_issue_branch_before_agent(tmp_path: Path) -> None:
 
     assert result.status == JobStatus.COMPLETED, result.last_error
     assert [job.id for job in publisher.prepared] == [result.id]
+    assert result.publication.get("linked_issue") is True
+    assert result.publication.get("change_request_url")
 
 
 def test_job_runner_resumes_paused_session(tmp_path: Path) -> None:
