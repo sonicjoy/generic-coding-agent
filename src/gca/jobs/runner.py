@@ -25,6 +25,7 @@ from gca.providers.base import ProviderError
 from gca.repo_config import RepoConfig, load_repo_config
 from gca.runtime import RuntimeConfig, create_coordinator
 from gca.session import STATUS_COMPLETED, STATUS_FAILED, STATUS_PAUSED, Session, SessionStore
+from gca.usage import totals_from_dict
 from gca.workspace.layout import JobWorkspace
 from gca.workspace.prepare import WorkspaceError, prepare_repository
 
@@ -222,6 +223,10 @@ class JobRunner:
             on_event=lambda message: self._on_agent_event(job, message),
         )
         result = coordinator.run(session, sessions)
+        # Session usage is cumulative across resumes; copy absolute totals onto the
+        # durable job record so cost survives workspace wipe.
+        job.llm_usage = totals_from_dict(session.llm_usage).to_dict()
+        self.store.save(job)
         return result, _implementation_summary(session)
 
     def _apply_result(

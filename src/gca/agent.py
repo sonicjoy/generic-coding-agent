@@ -29,6 +29,7 @@ from gca.tools.control import (
     NEEDS_HUMAN_TOOL_NAME,
     NO_SAFE_CHANGE_TOOL_NAME,
 )
+from gca.usage import merge_usage, totals_from_dict
 
 # Callback invoked with human-readable progress events (e.g. for CLI logging).
 EventHook = Callable[[str], None]
@@ -117,6 +118,15 @@ class Agent:
             active_name = getattr(self.provider, "active_name", None)
             if isinstance(active_name, str) and active_name:
                 session.active_model = active_name
+            if response.usage is not None:
+                if not response.usage.model:
+                    response.usage.model = session.active_model or getattr(
+                        self.provider, "model_id", ""
+                    )
+                session.llm_usage = merge_usage(
+                    totals_from_dict(session.llm_usage),
+                    response.usage,
+                ).to_dict()
             response.content = self.context.redact(response.content)
             session.step_count += 1
             session.messages.append(

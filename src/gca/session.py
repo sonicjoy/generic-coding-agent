@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from gca.providers.base import Message
+from gca.usage import empty_usage_dict
 
 # Lifecycle statuses a session may hold.
 STATUS_ACTIVE = "active"
@@ -151,6 +152,7 @@ class Session:
     active_model: str = ""
     final_message: str = ""
     inflight_tool_call_id: str = ""
+    llm_usage: dict[str, Any] = field(default_factory=empty_usage_dict)
 
     def touch(self) -> None:
         self.updated_at = _now()
@@ -172,11 +174,13 @@ class Session:
             "active_model": self.active_model,
             "final_message": self.final_message,
             "inflight_tool_call_id": self.inflight_tool_call_id,
+            "llm_usage": dict(self.llm_usage),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Session:
         workflow_data = data.get("workflow")
+        usage = data.get("llm_usage")
         return cls(
             id=str(data["id"]),
             task=str(data.get("task", "")),
@@ -195,6 +199,7 @@ class Session:
             active_model=str(data.get("active_model", "")),
             final_message=str(data.get("final_message", "")),
             inflight_tool_call_id=str(data.get("inflight_tool_call_id", "")),
+            llm_usage=dict(usage) if isinstance(usage, dict) else empty_usage_dict(),
         )
 
 

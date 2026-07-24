@@ -154,6 +154,7 @@ class Job:
     publication: dict[str, Any] = field(default_factory=dict)
     result_summary: str = ""
     last_error: str = ""
+    llm_usage: dict[str, Any] = field(default_factory=dict)
     lease_owner: str | None = None
     lease_expires_at: float | None = None
     not_before: float = 0.0
@@ -176,6 +177,7 @@ class Job:
             "publication": self.publication,
             "result_summary": self.result_summary,
             "last_error": self.last_error,
+            "llm_usage": dict(self.llm_usage),
             "lease_owner": self.lease_owner,
             "lease_expires_at": self.lease_expires_at,
             "not_before": self.not_before,
@@ -188,6 +190,7 @@ class Job:
     def from_dict(cls, data: dict[str, Any]) -> Job:
         """Deserialize a persisted job."""
 
+        usage = data.get("llm_usage")
         return cls(
             id=str(data["id"]),
             status=JobStatus(str(data.get("status", JobStatus.QUEUED.value))),
@@ -202,6 +205,7 @@ class Job:
             publication=dict(data.get("publication", {})),
             result_summary=str(data.get("result_summary", "")),
             last_error=str(data.get("last_error", "")),
+            llm_usage=dict(usage) if isinstance(usage, dict) else {},
             lease_owner=(str(data["lease_owner"]) if data.get("lease_owner") else None),
             lease_expires_at=(
                 float(data["lease_expires_at"])

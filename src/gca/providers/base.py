@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from gca.providers.tool_arguments import parse_tool_arguments
+from gca.usage import LLMUsage
 
 
 class ProviderError(RuntimeError):
@@ -90,6 +91,7 @@ class LLMResponse:
 
     content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: LLMUsage | None = None
 
 
 class LLMProvider(ABC):
