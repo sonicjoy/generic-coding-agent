@@ -109,8 +109,7 @@ def test_feature_workflow_routes_separate_agents(tmp_path: Path) -> None:
                             "command": (
                                 "python -c "
                                 + repr(
-                                    "import greeting; "
-                                    "assert greeting.greet('Ada') == 'Hello, Ada!'"
+                                    "import greeting; assert greeting.greet('Ada') == 'Hello, Ada!'"
                                 )
                             )
                         },

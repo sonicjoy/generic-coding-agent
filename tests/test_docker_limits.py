@@ -35,9 +35,7 @@ def test_resource_limits_disabled_env(monkeypatch: object) -> None:
     assert not resource_limits_disabled()
 
 
-def test_run_retries_without_limits_on_cgroup_failure(
-    tmp_path: Path, monkeypatch: object
-) -> None:
+def test_run_retries_without_limits_on_cgroup_failure(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.delenv("GCA_DOCKER_DISABLE_RESOURCE_LIMITS", raising=False)  # type: ignore[attr-defined]
     executor = DockerExecutor(
         workspace=tmp_path,
