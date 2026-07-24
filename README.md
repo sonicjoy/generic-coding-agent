@@ -1,111 +1,56 @@
 # GCA: Generic Coding Agent
 
-A provider-agnostic, pluggable **autonomous coding-agent harness** — the core
-engine you point at a task (or a git issue) so it can reason, edit code, run
-tests, and iterate until the work is done. It is deliberately unopinionated about
-the LLM backend: you plug in your own provider, tools, and skills.
+Provider-agnostic harness for autonomous coding agents. Point it at a task (or
+SCM issue); it reasons, edits code, runs checks, and iterates until done. The
+LLM backend is pluggable.
 
 ## What it does
 
-The harness runs an agentic loop:
-
 ```
-observe -> reason (LLM) -> choose tool -> execute -> record result -> update plan -> repeat
+observe -> reason (LLM) -> choose tool -> execute -> record result -> repeat
 ```
 
-It stops when the model calls the `finish` tool, returns no further tool calls,
-or the step budget is exhausted.
+Stops when the model calls `finish`, returns no tool calls, or hits the step
+budget.
 
-### Capabilities
+**Core**
 
-- **Multi-step reasoning** with an explicit step budget.
-- **Multi-model routing** using registered strength, speed, cost, and capability
-  metadata.
-- **Workflow orchestration**: small tasks use one efficient agent; feature work
-  uses separate planning, implementation, and review agents.
-- **Memory / state** persisted per session (resume any run).
-- **Batteries-included tools**: `explore`, `search`, `read_file`, `write_file`,
-  `create_file`, `delete_file`, `move_file`, `apply_patch` (unified diffs), and
-  `run_command` (tests, linters, formatters, builds, dev servers, analysis).
-- **Safe patching**: unified diffs are validated then applied atomically; on any
-  failure nothing is written.
-- **Shell guardrails**: `run_command` blocks destructive commands (`rm`/`rmdir`/
-  `unlink`, `sudo`, `git push --force`, `git reset --hard`, `git clean -f`,
-  and similar) before they reach the shell.
-- **`AGENTS.md` ingestion**: project instructions are discovered (nested,
-  root-first) and injected into the system prompt.
-- **Skills**: `SKILL.md` SOP files are indexed and lazily loaded via `load_skill`.
-- **Plugins**: optional drop-in Python modules for custom tools or exotic
-  providers — no build step. Everyday model setup uses ``models.yaml``.
-- **Sessions**: create / list / resume, persisted as JSON.
-- **Portable repository manifests**: strict `.gca/config.yaml` validation for
-  personas, skills, routing, fixed commands, tool permissions, and limits.
-- **Containerized command execution**: every `run_command` / fixed command runs
-  inside a Docker isolation image (repo `Dockerfile.agent` when present, else a
-  packaged default). Docker Engine is required for real agent runs.
-- **Durable hosted jobs**: idempotent SQLite jobs, isolated clones, leases,
-  retries, resume, and service-owned GitHub/GitLab publication.
-- **Durable GitLab issue sessions**: one aggregate per issue with webhook
-  commands, clarification, MR remediation, two-key auto-merge, and redacted logs.
-- **Optional API/worker service**: authenticated runs and verified SCM webhooks
-  without adding HTTP dependencies to the default installation.
+- Multi-step runs with an explicit step budget and resumable JSON sessions
+- Multi-model routing (strength / speed / cost) and `fast` vs `feature`
+  workflows (plan → implement → review)
+- Tools: explore/search, filesystem CRUD, `apply_patch`, `search_replace`,
+  `run_command` (Docker-isolated; destructive shell patterns blocked)
+- `AGENTS.md` ingestion, skills (`SKILL.md`), plugins, `.gca/config.yaml`
+  manifests, `models.yaml` catalogs
 
-## Install (development)
+**Hosted (optional `gca-service`)**
 
-**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), and
-**Docker Engine** (daemon reachable via `docker info`) for real agent runs.
-Unit tests use a fake executor and do not need Docker.
+- Durable SQLite jobs with leases, retries, resume, and GitHub/GitLab publish
+- Verified webhooks, GitLab issue sessions, worker + authenticated API
+
+## Install
+
+Python 3.10+, [uv](https://docs.astral.sh/uv/), and **Docker Engine** for real
+`run_command` runs (unit tests use a fake executor).
 
 ```bash
-# Install uv if needed: https://docs.astral.sh/uv/getting-started/installation/
-uv sync --extra dev
-source .venv/bin/activate
-```
-
-Alternatively with pip:
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-For day-to-day use against other repos, ``uv sync --extra service`` (or
-``pip install -e ".[service]"``) is enough.
-
-## Quick start in your project
-
-Use these steps to point `gca` at a repo you want the agent to improve. The
-examples below use **mmmapper** as the sample workspace — replace that path
-with yours.
-
-Ready-to-copy templates under ``examples/templates/`` include `AGENTS.md`,
-`models.yaml`, `.gca/config.yaml`, personas, and a sample skill.
-
-### 1. Install the harness
-
-```bash
-cd /path/to/generic-coding-agent
-uv sync
+uv sync --extra dev          # or: uv sync --extra service
 source .venv/bin/activate
 gca --help
-docker info   # must succeed for real agent command execution
+docker info                  # required for live agent command execution
 ```
 
-Keep this environment activated (or install into a tooling venv on your `PATH`).
+Pip fallback: `python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"`.
 
-### 2. Enter your project
+## Quick start (target repo)
 
-```bash
-cd /path/to/mmmapper
-```
-
-`--workspace` defaults to the current directory.
-
-### 3. Copy the templates
+Templates live under `examples/templates/` (`AGENTS.md`, `models.yaml`,
+`.gca/config.yaml`, personas, sample skill).
 
 ```bash
 GCA=/path/to/generic-coding-agent
+cd /path/to/your-project
+
 cp "$GCA/examples/templates/models.yaml" ./models.yaml
 cp "$GCA/examples/templates/AGENTS.md" ./AGENTS.md
 mkdir -p .gca/personas
@@ -113,206 +58,102 @@ cp "$GCA/examples/templates/.gca/config.yaml" ./.gca/config.yaml
 cp "$GCA/examples/templates/.gca/persona.md" ./.gca/persona.md
 cp "$GCA/examples/templates/.gca/personas/"*.md ./.gca/personas/
 cat "$GCA/examples/templates/gca.gitignore" >> ./.gitignore
-```
 
-Edit model IDs / scores in `models.yaml`, routing and fixed commands in
-`.gca/config.yaml`, and project-specific conventions in `AGENTS.md`. Then
-validate everything without making a model call:
-
-```bash
+printf 'OPENROUTER_API_KEY=sk-or-...\n' > .env && chmod 600 .env
 gca validate --workspace .
-```
-
-Model catalog search order (later overrides earlier):
-
-1. `~/.gca/models.yaml`
-2. `<project>/models.yaml`
-3. `<project>/.gca/models.yaml`
-4. `--models <path>` (repeatable)
-
-Never put API keys in `models.yaml` — only the env var *name* (for example
-`api_key_env: OPENROUTER_API_KEY`). Model names under `routing.models` in
-`.gca/config.yaml` must match names registered in `models.yaml`.
-
-### 4. Set the API key
-
-```bash
-printf 'OPENROUTER_API_KEY=sk-or-...\n' > .env
-chmod 600 .env
-```
-
-Also supported: `~/.gca/.env`, `<project>/.gca/.env`, or a normal shell
-`export`. Keep `.env` out of git.
-
-### 5. (Optional) Add skills
-
-```text
-mmmapper/
-  skills/
-    my-workflow/
-      SKILL.md
-```
-
-Skills are discovered from `skills/` and `.gca/skills/`, or from extra
-`--skills` directories. Each skill uses `skills/<name>/SKILL.md` with YAML
-`name` and `description`; only its catalog entry is injected until the model
-calls `load_skill`.
-
-### 6. Run a task
-
-```bash
-. /path/to/generic-coding-agent/.venv/bin/activate
-cd /path/to/mmmapper
-
 gca run "Fix the flaky login test"
-gca run "Fix a typo in README" --workflow fast
-gca run "Add search history to the API" --workflow feature
-gca run "Refactor auth middleware" --max-steps 40
-```
-
-- Small tasks use one efficient agent (`fast`).
-- Feature/large changes use planner → implementer → reviewer (`feature`).
-- Sessions are stored under `.gca/sessions/` (gitignored).
-
-### 7. List and resume sessions
-
-```bash
 gca sessions
 gca resume <session_id>
 ```
 
-### What to commit
+Model catalog search order (later wins): `~/.gca/models.yaml` →
+`<project>/models.yaml` → `<project>/.gca/models.yaml` → `--models` (repeatable).
+Store only env var *names* in YAML (`api_key_env`), never secrets. Prefer
+`.env`, `~/.gca/.env`, or `.gca/.env` (gitignored).
 
 | Commit | Do not commit |
 |--------|----------------|
-| `models.yaml` | `.env`, `.gca/.env` |
-| `AGENTS.md`, `.gca/config.yaml` | `.gca/sessions/` |
-| `.gca/persona.md`, `.gca/personas/**` | `.gca/jobs/` |
-| `skills/**` | API keys |
+| `models.yaml`, `AGENTS.md`, `.gca/config.yaml`, personas, `skills/**` | `.env`, `.gca/.env`, `.gca/sessions/`, `.gca/jobs/`, API keys |
 
-Suggested layout after setup (mmmapper shown as the example project):
-
-```text
-mmmapper/
-  AGENTS.md            # copied from examples/templates/
-  models.yaml          # copied from examples/templates/
-  .gca/
-    config.yaml        # routing, tools, limits
-    persona.md         # optional base persona
-    personas/          # optional phase personas
-    sessions/          # runtime, ignored
-  .env                 # local only
-  skills/              # optional
-```
-
-### 8. Durable isolated job run
-
-Use the job runner when the harness should clone a clean repository instead of
-working in the current checkout:
+**Isolated job (clean clone):**
 
 ```bash
 gca job run "Fix the null metadata bug" \
-  --repository https://git.example.com/team/mmmapper.git \
-  --ref main \
-  --allowed-host git.example.com
-
-# If the step budget pauses the job:
+  --repository https://git.example.com/team/repo.git \
+  --ref main --allowed-host git.example.com
 gca job resume <job_id> --max-steps 80 --allowed-host git.example.com
 ```
 
-Jobs use isolated workspaces, SQLite-backed idempotency and leases, and the same
-resumable agent sessions. Hosted-mode jobs hide raw `run_command` unless the
-manifest explicitly exposes it; configure safe checks as fixed argv commands.
-
 ### Step budget
 
-CLI runs, `POST /runs`, and `POST /runs/{id}/resume` all share the same
-maximum-step budget model. The effective budget is chosen in this order:
+Effective max steps (highest wins first):
 
-1. An explicit request value: `--max-steps` for CLI/job commands, `max_steps` on
-   `POST /runs`, or a larger `max_steps` on resume.
-2. `GCA_DEFAULT_MAX_STEPS` for hosted service jobs submitted without an explicit
-   budget.
-3. The target repository's `.gca/config.yaml` `runtime.max_steps` value
-   (default `25`).
-4. For feature workflows, phase budgets consume the remaining total. The
-   implementation phase cannot spend the review reserve; configure that reserve
-   with `review_step_reserve` (default `5`).
+1. Explicit `--max-steps` / `max_steps` on `POST /runs` or resume
+2. `GCA_DEFAULT_MAX_STEPS` (hosted, when omitted)
+3. Repo `.gca/config.yaml` `runtime.max_steps` (default `25`)
+4. Feature workflows reserve review steps (`review_step_reserve`, default `5`)
+
+Mid-run budget exhaustion **pauses** the job (no publish of unfinished
+implementation). Resume with a larger `max_steps` or an authorized `/agent fix`.
 
 ## Repository manifest
 
-`.gca/config.yaml` is a strict, versioned manifest for settings that should be
-portable with a repository. `models.yaml` remains separate.
+`.gca/config.yaml` is the portable, strict repo config (`models.yaml` stays
+separate). Precedence: code defaults → `~/.gca/config.yaml` → repo manifest →
+`AGENTS.md` `gca:` frontmatter → CLI.
 
 ```yaml
 version: 1
-
 context:
-  files: [AGENTS.md, CLAUDE.md]
-  include_frontmatter: false
+  files: [AGENTS.md]
   persona_file: .gca/persona.md
   phase_personas:
     planning: .gca/personas/planning.md
     implementation: .gca/personas/implementation.md
     review: .gca/personas/review.md
-
 skills:
   dirs: [.gca/skills, skills]
-
 routing:
   workflow: auto
   models:
     fast: fast-model
-    # A list is primary-then-fallback order (runtime failover on retryable errors).
     planning: [strong-model, fallback-strong-model]
     implementation: fast-model
     review: [strong-model, fallback-strong-model]
   max_review_cycles: 2
-  # Steps held back from implementation so review/publish can still finish
-  # (0..50; default 5).
   review_step_reserve: 5
-
 runtime:
-  profile: local
   max_steps: 25
   max_tool_timeout: 300
-
 tools:
   deny: []
   fixed_commands:
     run_tests:
       description: Run the repository test suite.
       argv: [python, -m, pytest]
-      cwd: .
-      timeout: 300
       phases: [execute, implementation, review]
+publication:
+  required_checks: [run_tests]
+  allowed_paths: ["src/**", "tests/**"]
+  denied_paths: [".env", ".gca/.env"]
+  max_files: 50
+  max_changed_lines: 2000
+  auto_merge: false
 ```
 
-Effective precedence is code defaults → `~/.gca/config.yaml` → repository
-`.gca/config.yaml` → nested `AGENTS.md` `gca:` frontmatter → CLI flags.
-Manifest paths are repository-relative and cannot escape the workspace.
-Frontmatter remains backward-compatible but is stripped from model-facing
-instructions by default.
+Fixed commands run a fixed argv in the isolation container (no shell). Global
+deny / phase allow rules are enforced by the tool registry.
 
-Fixed commands run a fixed argv inside the isolation container (no shell);
-optional parameters must declare bounded types/choices in the manifest. Global
-deny and phase allow rules are enforced by the tool registry, not only by
-prompts.
+Isolation containers default to `network: false`. Set
+`environment.network: true` only when trusted fixed commands need outbound
+access (treat as a trust-boundary change). Prefer a repo `Dockerfile.agent`
+(see `examples/templates/Dockerfile.agent`); otherwise GCA uses a minimal
+default image (bash/git/curl only).
 
-## Provider configuration
+## Providers
 
-Configure models declaratively with ``models.yaml`` (preferred). Plugins remain
-optional for custom tools or non-OpenAI-compatible backends. Offline demos can
-still use ``--script``.
-
-### models.yaml (no plugins required)
-
-Search order (later overrides earlier):
-
-1. ``~/.gca/models.yaml``
-2. ``<workspace>/models.yaml``
-3. ``<workspace>/.gca/models.yaml``
-4. Extra paths from ``--models``
+Declarative `models.yaml` is preferred; plugins are for custom tools or
+non-OpenAI-compatible backends. Offline demos: `--script`.
 
 ```yaml
 providers:
@@ -320,7 +161,6 @@ providers:
     type: openai_compatible
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
-
 models:
   gpt-5.6-luna:
     provider: openrouter
@@ -328,28 +168,9 @@ models:
     strength: 3
     speed: 5
     cost: 1
-  claude-opus-4.8:
-    provider: openrouter
-    model_id: anthropic/claude-opus-4.8
-    strength: 5
-    speed: 2
-    cost: 5
 ```
 
-API keys stay in environment variables (or a local ``.env`` / ``~/.gca/.env`` /
-``<workspace>/.env`` file that is never committed):
-
-```bash
-export OPENROUTER_API_KEY=...
-gca run "Fix a typo in README" --workspace .
-```
-
-See ``examples/templates/models.yaml`` (or ``examples/models.yaml``) for a
-fuller OpenRouter catalog.
-
-Local runs treat workspace model catalogs as trusted repository configuration.
-When inspecting an untrusted checkout, ignore its catalogs and provider secret
-selectors:
+Untrusted checkout inspection:
 
 ```bash
 gca run "Inspect this repository" \
@@ -357,17 +178,9 @@ gca run "Inspect this repository" \
   --models /path/to/operator-owned-models.yaml
 ```
 
-### Optional plugins
-
-- ``get_models()`` / ``get_provider()`` can still register models; plugin names
-  override YAML entries with the same name.
-- Plugins are also used for custom tools.
-- Local repository plugins are trusted in-process Python. Hosted workers refuse
-  checkout-local plugins and load only an operator-supplied external directory.
-- Approved tools request secrets through `ToolContext.secret`; authorize each
-  environment variable explicitly in `.gca/config.yaml`:
-- Read-only plugin tools should declare `capabilities = frozenset({"read_external"})`
-  before they can be exposed to planning or review phases.
+Plugins may expose `get_models()` / `get_provider()` and custom tools. Hosted
+workers refuse checkout-local plugins (`GCA_PLUGIN_DIR` only) and ignore
+checkout-local model catalogs. Grant tool secrets explicitly:
 
 ```yaml
 tools:
@@ -375,418 +188,141 @@ tools:
     query_observability: [OBSERVABILITY_API_TOKEN]
 ```
 
-```python
-from gca.models import ModelProfile
-
-
-def get_models():
-    return [
-        ModelProfile(
-            name="custom",
-            provider=MyProvider(model="custom-model"),
-            strength=4,
-            speed=3,
-            cost=3,
-        ),
-    ]
+```bash
+export GCA_TOOL_SECRET_GRANTS='{"github.com/example/project":{"query_metrics":["METRICS_TOKEN"]}}'
 ```
-
-### Scripted provider
-
-The built-in **scripted provider** (``--script script.json``) replays a fixed
-sequence of tool calls with no network access (demos/tests).
 
 ## Workflows and routing
 
-Labeled SCM issue webhooks wrap title/body as untrusted task text. Complexity
-scoring uses the **issue title only** for those framed tasks so process words in
-the description (for example `end-to-end`) do not force the multi-phase feature
-workflow and exhaust a small step budget. Plain CLI tasks still classify on the
-full prompt.
+`gca` classifies tasks without an extra model call:
 
-`gca` classifies task text deterministically, without an extra model call:
+- **fast** — one efficient coding agent
+- **feature** — planner → implementer → reviewer (up to two rework cycles)
 
-- `fast`: one efficient coding agent for small tasks.
-- `feature`: a strong planning agent, an efficient implementation agent, then
-  an independent strong reviewer. Reviewers can request up to two rework cycles.
+Planning gets read/search tools; review can `run_command` but not edit;
+implementation gets edit tools. Override with `--workflow fast|feature|auto`
+or `routing` in the manifest.
 
-Planning receives only read/search tools. Review also receives `run_command`
-for verification but no file-edit tools; only implementation agents receive
-the file-editing tools. Each role has a separate conversation, and structured
-plans/reviews are persisted in the parent session.
-
-Override automatic selection with `--workflow fast|feature|auto`, or configure
-`routing` in `.gca/config.yaml`. Model values refer to names registered in
-`models.yaml` or plugins. Legacy YAML frontmatter remains supported:
-
-```yaml
----
-gca:
-  workflow: auto
-  models:
-    fast: deepseek-v3.2
-    planning: claude-opus-4.8
-    implementation: deepseek-v3.2
-    review: claude-opus-4.8
-  minimum_strength:
-    implementation: 2
-  max_review_cycles: 2
-  review_step_reserve: 5
-  complexity:
-    feature_threshold: 3
-    large_threshold: 6
----
-```
-
-Model values may be a single registered name or an ordered list. The first
-usable model is bound for the role; later names are runtime fallbacks when the
-active provider raises a retryable error (timeouts, 5xx, rate limits).
-
-Nested `AGENTS.md`/`CLAUDE.md` configuration is merged root-first, so deeper
-files override individual routing values. Markdown bodies remain part of every
-agent's system context; configuration frontmatter is stripped by default.
+Labeled SCM issue webhooks wrap title/body as untrusted text. Complexity
+scoring for those framed tasks uses the **issue title only**, so process words
+in the description do not force a feature workflow. Plain CLI tasks still
+classify on the full prompt.
 
 ## Optional hosted service
 
-Install the service extra, then run the API and worker as separate processes
-sharing the same `GCA_DATA_DIR`. See `examples/service.env.example` for all
-settings:
-
 ```bash
-pip install -e ".[service]"
-
+uv sync --extra service   # or pip install -e ".[service]"
 export GCA_API_TOKEN=replace-with-a-long-random-token
 export GCA_DATA_DIR=/var/lib/gca
 export GCA_ALLOWED_REPOSITORY_HOSTS=github.com,gitlab.com
 export GCA_MODEL_CONFIG_PATHS=/etc/gca/models.yaml
-
 gca-service serve --host 0.0.0.0 --port 8000
 gca-service worker
 ```
 
-The API exposes:
+Full env reference: `examples/service.env.example`.
 
-- `POST /runs` — authenticated generic `RunSpec` submission; supports
-  `Idempotency-Key`.
-- `GET /runs/{id}`, `POST /runs/{id}/cancel`, and
-  `POST /runs/{id}/resume` with a larger `max_steps` budget (required when a
-  run paused on step-budget exhaustion; `max_steps` must exceed the prior
-  budget).
-- `POST /webhooks/github` and legacy `POST /webhooks/gitlab`.
-- `POST /webhooks/gitlab/{registration_id}` — preferred GitLab Issue Agent
-  ingress (Issue, Note, Merge Request, and Pipeline events).
-- `POST /issue-sessions`, `GET /issue-sessions`, `GET /issue-sessions/{id}`,
-  `GET /issue-sessions/{id}/events`, `GET /issue-sessions/{id}/transcript`,
-  `POST /issue-sessions/{id}/cancel`, and `POST /issue-sessions/{id}/retry`.
-- `GET /health` and `GET /ready`.
+### HTTP API
 
-`GET /ready` checks the shared job store and reports worker liveness metadata:
-queued job count, worker heartbeat age, and time since the last job claim. Set
-`GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS` to a positive value to make readiness
-fail when queued jobs exist but no worker has claimed work within that window;
-the default `0` only reports the metadata.
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/runs` | Authenticated `RunSpec`; supports `Idempotency-Key` |
+| `GET` | `/runs/latest` | Newest job in the configured `GCA_DATA_DIR` |
+| `GET` | `/runs/{id}` | Status, publication, lease fields, LLM usage/cost, session progress |
+| `POST` | `/runs/{id}/cancel` | Cancel queued/running work |
+| `POST` | `/runs/{id}/resume` | Larger `max_steps` after budget pause |
+| `POST` | `/runs/{id}/requeue` | Operator reclaim of a leased job |
+| `POST` | `/webhooks/github` | Verified GitHub ingress |
+| `POST` | `/webhooks/gitlab/{registration_id}` | Preferred GitLab issue-agent ingress |
+| `POST` | `/webhooks/gitlab` | Legacy single-registration GitLab |
+| `*` | `/issue-sessions…` | List/create/get/events/transcript/cancel/retry |
+| `GET` | `/health`, `/ready` | Liveness; `/ready` includes worker claim metadata |
 
-### Durable GitLab Issue Agent
+`GCA_READY_WORKER_CLAIM_TIMEOUT_SECONDS` (default `0`) can make `/ready` fail
+when queued jobs exist but no worker has claimed work in that window.
 
-Configure one registration per GitLab project webhook in
-`GCA_GITLAB_WEBHOOK_REGISTRATIONS`, then point GitLab at
-`POST /webhooks/gitlab/{registration_id}` for Issue, Comment, Merge Request,
-and Pipeline events (not Deployment events). The handler verifies the
-registration-bound signature, stores a normalized inbound event, and returns
-`202` immediately with a delivery status (`accepted`, `duplicate`, or
-`ignored`).
+On SIGTERM/SIGINT the worker releases its active lease immediately so another
+worker can claim; hard kills wait for `GCA_LEASE_SECONDS` or
+`POST /runs/{id}/requeue`.
 
-Product rules:
+`GET /runs/{id}` exposes durable LLM usage (`llm_usage`, token counts,
+`cost_usd`) and session progress when available. Keep API and worker on the
+same durable `GCA_DATA_DIR`; startup logs the data dir and newest job id.
 
-- Start only when the trigger label (default `gca-run`) is applied, or when an
-  authorized actor posts an exact `/agent run` comment.
-- Exact commands: `/agent run`, `/agent fix`, `/agent cancel`, `/agent status`.
-- One durable **issue session** per `(gitlab_instance, project_id, issue_iid)`
-  owns generations and turns; this is separate from the terminal model session.
-- The model can only read/edit/test. Clone, branch, commit, push, note, MR, and
-  merge credentials stay service-owned and are never granted to tools.
-- Clarification answers continue a waiting generation; MR review comments or
-  `/agent fix` continue while awaiting merge.
-- Auto-merge is deny-wins and two-key: the operator must list the numeric
-  project in `GCA_ALLOW_AUTO_MERGE_PROJECTS`, and the trusted target-repo
-  `.gca/config.yaml` (or root `gca.publication` frontmatter) must set
-  `publication.auto_merge: true`. Nested `AGENTS.md` cannot grant merge.
-- Completion means a verified linked MR merged into the frozen target branch.
-  Target-repo CI/CD owns deploy; the service never remediates deployment jobs.
-- Retention: `GCA_WORKSPACE_RETENTION_SECONDS` (default 24h) and
-  `GCA_LOG_RETENTION_SECONDS` (default 30d). Query redacted events/transcripts
-  through the authenticated `/issue-sessions` APIs.
+### Webhooks and publication
 
-Example run:
+- **GitHub**: `GCA_GITHUB_WEBHOOK_SECRET` + `GCA_ALLOWED_GITHUB_PROJECTS`.
+  Issue jobs enqueue when a maintainer applies `gca-run`
+  (`GCA_GITHUB_TRIGGER_LABEL`). PR review / `/agent fix` and merged-PR cancel
+  behavior are supported — see webhook event notes in
+  `examples/service.env.example`.
+- **Opt-in issue UX**: `GCA_GITHUB_ISSUE_ASSIGN` /
+  `GCA_GITHUB_ISSUE_PROGRESS_COMMENTS` (needs `issues:write`).
+- **Early branch**: labeled GitHub issue jobs create and push a working branch
+  (and link it when the API allows) before the agent runs.
+- **GitLab issue sessions**: prefer
+  `GCA_GITLAB_WEBHOOK_REGISTRATIONS` →
+  `POST /webhooks/gitlab/{registration_id}`. Start on trigger label or exact
+  `/agent run`; commands `/agent run|fix|cancel|status`. Service-owned clone /
+  commit / push / MR / merge — never granted to tools. Auto-merge is two-key
+  (`GCA_ALLOW_AUTO_MERGE_PROJECTS` + repo `publication.auto_merge`).
+- **Publish mode** (`GCA_PUBLISH_MODE`): `off` | `branch` | `pr` (`auto` ≡ `pr`).
+  Publication targets require matching `GCA_GITHUB_TOKEN` /
+  `GCA_GITLAB_TOKEN` at enqueue time. Tokens also provide askpass for private
+  HTTPS clones; they never enter the agent subprocess.
+
+Smoke test:
 
 ```bash
-curl -X POST http://localhost:8000/runs \
-  -H "Authorization: Bearer $GCA_API_TOKEN" \
-  -H "Idempotency-Key: ticket-123" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task": "Fix the flaky login test",
-    "repository": {
-      "url": "https://github.com/example/project.git",
-      "ref": "main"
-    },
-    "workflow": "auto"
-  }'
-```
-
-GitHub webhooks require `GCA_GITHUB_WEBHOOK_SECRET` and an explicit
-`GCA_ALLOWED_GITHUB_PROJECTS=owner/repo,...` allowlist. Prefer GitLab
-registrations JSON for issue sessions; legacy `GCA_GITLAB_WEBHOOK_SECRET` plus
-`GCA_ALLOWED_GITLAB_PROJECTS=group/repo,...` remains for single-registration
-mode and is rejected as ambiguous when multiple registrations are configured.
-The service verifies every delivery before normalization and deduplicates its
-authenticated body even if a replay uses a new delivery ID. GitHub issue
-deliveries enqueue only when a maintainer applies the `gca-run` label; customize
-it with `GCA_GITHUB_TRIGGER_LABEL` / `GCA_GITLAB_TRIGGER_LABEL` (or
-per-registration `trigger_label`).
-
-For a one-command hosted GitHub webhook smoke test, export service settings plus
-the target repository identity, then run:
-
-```bash
-export GCA_API_TOKEN=replace-with-a-long-random-token
-export GCA_GITHUB_WEBHOOK_SECRET=replace-with-a-long-random-secret
+export GCA_API_TOKEN=... GCA_GITHUB_WEBHOOK_SECRET=...
 export GCA_ALLOWED_GITHUB_PROJECTS=owner/repo
 export GCA_E2E_REPOSITORY_FULL_NAME=owner/repo
 export GCA_E2E_REPOSITORY_CLONE_URL=https://github.com/owner/repo.git
 export GCA_DATA_DIR=/tmp/gca-e2e
-
-examples/e2e_webhook.sh
+examples/e2e_webhook.sh   # defaults GCA_PUBLISH_MODE=off
 ```
 
-The script starts `gca-service serve`, waits for `/ready`, starts
-`gca-service worker`, signs a GitHub `issues.labeled` webhook with Python HMAC,
-posts it to `/webhooks/github`, polls `/runs/{id}`, and prints the terminal run
-status. It defaults `GCA_PUBLISH_MODE=off`; set it yourself and provide SCM
-tokens when you want the e2e to publish.
-
-GitHub pull-request review deliveries also enqueue into the same `/runs` queue
-when the webhook is subscribed to **Pull request reviews** and **Pull request
-review comments**:
-
-- `pull_request_review` submitted with state `changes_requested`
-- `pull_request_review` or `pull_request_review_comment` whose body contains a
-  line starting with `/agent fix`
-
-Those runs clone the PR **head** ref and publish against the PR **base** ref
-(fetching the base when a shallow single-branch clone omitted it). Ordinary
-approval/comment chatter does not enqueue; use Request changes or `/agent fix`.
-
-Subscribe the webhook to **Pull requests** as well. When GitHub delivers
-`pull_request` with `action=closed` and `merged=true`, the service cancels any
-still-active jobs linked to that PR (`pr_id` / publication URL / head ref) and
-wipes their workspaces/sessions. The worker process stays running for other
-jobs; only the matched job sessions are closed.
-
-Webhook and `POST /runs` submissions may omit `max_steps`; see
-[Step budget](#step-budget) for the CLI/service precedence rules and resume
-requirements.
-
-When a feature-workflow run exhausts its step budget mid-flight, the job
-**pauses** (it does not fail) and no PR/MR is opened for an unfinished diff.
-Implementation cannot consume the entire budget: a small review-step reserve is
-held back so review/publish can still run when implementation finishes within
-its allotment. On exhaustion the durable issue-session path posts an issue note
-with progress so far plus resume instructions. Recover with
-`POST /runs/{id}/resume` (larger `max_steps`) or an authorized `/agent fix`
-comment.
-The reserve size defaults to 5 and is configurable via `review_step_reserve`
-under `gca` frontmatter / routing config (0..50). If review still pauses after
-implementation finished, the orchestrator auto-resumes review once within any
-remaining reserved steps. Generic `/runs` and GitHub webhook jobs record the
-same resume guidance in `last_error` (visible on `GET /runs/{id}`). When
-implementation already produced a summary artifact and publication is
-configured, the runner also opens a **draft** change request on pause so
-operators waiting on `publication.change_request_url` still get a recoverable
-PR/MR; unfinished mid-implementation pauses never publish.
-
-For publication, set repository-scoped `GCA_GITHUB_TOKEN` and/or
-`GCA_GITLAB_TOKEN`. Webhook and `POST /runs` requests that include a
-publication target are rejected at enqueue time when the matching token is
-missing (the error names `GCA_GITHUB_TOKEN` / `GCA_GITLAB_TOKEN`).
-`GCA_PUBLISH_MODE` supports `off` (strip publication and do not push), `branch`
-(push the service branch without opening a PR/MR), and `pr` (push and open the
-PR/MR). `auto` remains a backward-compatible alias for `pr`.
-These tokens also provide temporary askpass credentials for private HTTPS
-clones on `GCA_GITHUB_HOST` / `GCA_GITLAB_HOST`; they are never passed to the
-agent subprocess. The askpass helper matches hosts via a Python regex over the
-Git prompt (including embedded-username forms such as
-`Password for 'https://x-access-token@github.com'`). Keep that helper as a
-plain Python string—do not over-escape `\s` in the source—or pushes fail with
-`credential prompt host mismatch`. CI runs `tests/test_git_credentials.py` on
-every PR to prevent that regression. The worker—not the LLM—runs required
-fixed checks, enforces the repository's `publication` limits, commits, pushes
-a deterministic branch, and opens an idempotent PR/MR:
-
-```yaml
-publication:
-  required_checks: [run_tests]
-  allowed_paths: ["src/**", "tests/**", "README.md"]
-  denied_paths: [".env", ".gca/.env"]
-  max_files: 50
-  max_changed_lines: 2000
-  auto_merge: false
-```
-
-When `required_checks` is omitted, publication still runs default quality
-gates on changed `.py` files: an in-process syntax parse (so unparseable
-Python cannot be pushed even when the isolation image has no Python), then
-`ruff check` and `python -m mypy` through the isolation executor when those
-tools are installed. Missing tools are skipped; failing tools block publish.
-
-The bundled SQLite store supports a single node with multiple worker processes
-and serializes jobs targeting the same repository. Deployments with ephemeral
-filesystems or horizontal nodes must provide durable shared storage and a
-`JobStore`/`JobQueue` backend appropriate to that platform. Lambda is suitable
-as ingress, not for the long-running worker.
-
-Hosted jobs never import Python plugins from the cloned repository; pass an
-operator-installed `GCA_PLUGIN_DIR` instead. They also ignore checkout-local
-model catalogs and use `~/.gca/models.yaml` plus operator-owned
-`GCA_MODEL_CONFIG_PATHS`; this prevents a repository from selecting a service
-secret as its provider key. Repository tool secret requests are denied unless
-the exact canonical project, tool, and environment name are granted in
-`GCA_TOOL_SECRET_GRANTS`; API, webhook, and SCM tokens cannot be granted.
-Publication uses the immutable manifest snapshot loaded before the agent runs.
-
-```bash
-export GCA_TOOL_SECRET_GRANTS='{
-  "github.com/example/project": {
-    "query_metrics": ["METRICS_TOKEN"]
-  }
-}'
-```
-
-The built-in controls isolate **target-repo commands** in Docker containers
-(with CPU/memory limits and workspace bind mounts). Deploy the GCA worker with
-access to a Docker Engine (typically by mounting `/var/run/docker.sock`).
-Isolation containers default to `network: false` so repository-controlled
-commands cannot make outbound network calls. Enable `environment.network: true`
-in the target repo's `.gca/config.yaml` only when trusted fixed commands need
-network access, such as downloading private package dependencies or contacting a
-test-only service. Treat this as a trust boundary change: commands running in
-that repository can exfiltrate workspace data or use any granted tool secrets,
-so prefer prebuilt `Dockerfile.agent` images, vendored dependencies, or narrowly
-scoped test credentials before enabling it.
-Monitoring / anomaly detection stays outside core and can create an SCM issue
-or call `POST /runs`. The worker's retention janitor also prunes stale per-run
-isolation images (`gca/<run-id>:run`) after the workspace retention window; the
-shared `gca/default-isolation` image is kept.
-
-### Deploy GCA on AWS / GCP (Docker)
-
-Build and push the worker image (uses **uv** in a multi-stage `Dockerfile`):
+### Deploy
 
 ```bash
 docker build -t gca:latest .
-# tag/push to ECR, GCR, or Artifact Registry as needed
-```
-
-Local / cloud-like bring-up with Compose (API + worker, shared data volume,
-Docker socket for nested isolation runs). Compose waits for API `/ready`
-before starting the worker so SQLite schema init is not raced:
-
-```bash
 cp examples/service.env.example .env   # set GCA_* tokens
-docker compose up --build
+docker compose up --build              # API waits for /ready, then worker
 ```
 
-Without Compose, start the API first, wait for `GET /ready`, then start the
-worker. Store initialization also retries on `database is locked`.
+Mount durable `GCA_DATA_DIR` and `/var/run/docker.sock`. Optional
+`GCA_DOCKER_DISABLE_RESOURCE_LIMITS=1` on nested cgroupv2 hosts that reject
+`--cpus`/`--memory`.
 
-Job IDs live in the SQLite store under `GCA_DATA_DIR`. API and worker processes
-must point at the same durable directory across restarts; changing or losing that
-directory makes old `/runs/{id}` URLs return 404 even if another data directory
-still has the job. On startup, both processes log the configured data dir and
-newest job ID. Use authenticated `GET /runs/latest` to discover the newest run
-in the currently configured data dir, and compare the 404 hint when diagnosing a
-data-dir mismatch. A future hosted webhook e2e recipe can use this pointer when
-recovering from restarts.
-
-On a VM or container host, run the worker with:
-
-- `GCA_DATA_DIR` on durable storage
-- `/var/run/docker.sock` mounted read/write so the worker can `docker build` /
-  `docker run` per-session isolation containers
-- Org-scoped `GCA_GITHUB_TOKEN` or `GCA_GITLAB_TOKEN` (one token per tenant deploy)
-- Optional `GCA_DOCKER_DISABLE_RESOURCE_LIMITS=1` on nested cgroupv2 hosts that
-  reject `--cpus`/`--memory` (the executor also retries once without limits)
-
-Target repos should add `Dockerfile.agent` (or `environment.dockerfile` in
-`.gca/config.yaml` / `agent/config.yaml`) when `run_command` needs a language
-SDK, package manager, or project tooling. See
-`examples/templates/Dockerfile.agent` for a Python starting point. Without a
-repo image, GCA uses a packaged default isolation image
-(`src/gca/executor/default.Dockerfile`: bash/git/curl only — no Python/Node).
-Put language SDKs in the repo isolation image, not the GCA host image.
-
-## Usage
-
-See [Quick start in your project](#quick-start-in-your-project) for the full
-setup flow (examples use mmmapper). Short examples:
+## Development
 
 ```bash
-# After models.yaml + .env are in place
-gca run "Fix a typo in README"
-gca run "Add search history" --workflow feature
+uv sync --extra dev --extra service
+ruff check .
+ruff format --check .
+mypy
+pytest                # unit + offline evals (no Docker)
+pytest -m eval
+pytest -m docker      # needs Docker Engine
+```
 
-# Offline demo with the scripted provider (needs Docker for run_command).
-# Seed Dockerfile.agent so isolation has Python — the default image does not.
+Offline scripted demo (needs Docker for `run_command`):
+
+```bash
 mkdir -p /tmp/gca_demo
 cp examples/templates/Dockerfile.agent /tmp/gca_demo/
 gca run "Add a greeting feature to this project" --workspace /tmp/gca_demo \
   --skills examples/skills --script examples/demo_script.json
 ```
 
-## Development
-
-```bash
-uv sync --extra dev --extra service
-ruff check .          # lint
-ruff format --check . # format check
-mypy                  # type check
-pytest                # unit tests + offline evals (no Docker required)
-pytest -m eval        # evaluation scenarios only
-pytest -m docker      # optional Docker Engine smoke tests
-```
-
-Offline eval scenarios live under ``evals/scenarios/`` and are driven by
-scripted models (no network). Add a YAML scenario there to cover a new
-workflow or routing behavior.
-
 ## Layout
 
 ```
-src/gca/
-  agent.py       core loop
-  runtime.py     assembly (system prompt, registry, provider resolution)
-  repo_config.py versioned .gca/config.yaml loader
-  tool_policy.py phase-aware tool exposure
-  session.py     session persistence
-  context.py     AGENTS.md discovery/merge
-  models.py      named model profiles + selection
-  model_config.py models.yaml catalog loader
-  routing.py     AGENTS.md routing policy
-  complexity.py  deterministic workflow classification
-  workflows.py   built-in workflow definitions
-  orchestrator.py multi-agent workflow coordinator
-  skills.py      skill discovery + load_skill tool
-  plugins.py     dynamic plugin loading
-  jobs/          durable job lifecycle, SQLite store/queue, runner
-  workspace/     isolated repository preparation
-  executor/      Docker isolation executor, default image, run lifecycle
-  integrations/  webhook and SCM adapter contracts/implementations
-  providers/     LLMProvider, OpenAI-compatible, ScriptedProvider
-  tools/         built-in and fixed-command tools
-src/gca_service/ optional ASGI API and worker
-Dockerfile       uv-based worker/API image
-compose.yaml     local/cloud-like API+worker with docker.sock
-examples/        copy-ready config/persona/skill/model templates
-evals/           offline deterministic evaluation scenarios
-tests/           pytest suite
+src/gca/           CLI harness (agent, tools, jobs, executor, integrations…)
+src/gca_service/   optional Starlette API + worker
+examples/          templates, service.env.example, e2e_webhook.sh, demo script
+evals/             offline scripted scenarios
+tests/             pytest suite
+Dockerfile         uv-based API/worker image
+compose.yaml       local API+worker with docker.sock
 ```
