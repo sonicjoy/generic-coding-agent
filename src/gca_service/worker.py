@@ -123,7 +123,6 @@ class ServiceWorker:
                 ).run()
             return None
         self._idle_ticks = 0
-<<<<<<< HEAD
         self._emit(
             structured_event(
                 "worker",
@@ -139,10 +138,8 @@ class ServiceWorker:
                 source=job.run_spec.labels.get("source"),
             )
         )
-=======
         with self._active_lock:
             self._active_job_id = job.id
->>>>>>> 21f756d (feat: reclaim worker leases on shutdown and via API (#48))
 
         def clone_credentials(repository: RepositorySpec) -> GitCredentials | None:
             host = repository_host(repository.url)
@@ -160,41 +157,8 @@ class ServiceWorker:
         except ValueError:
             tool_secret_grants = {}
 
-<<<<<<< HEAD
         announce_github_issue_start(job, settings, on_event=self.on_event)
 
-        with _LeaseKeeper(self.state, job) as lease:
-            runner = JobRunner(
-                store=self.state.store,
-                workspace_root=settings.workspace_root,
-                model_loader=self.model_loader,
-                publisher=_publisher(self.state),
-                allowed_repository_hosts=settings.allowed_repository_hosts,
-                allow_local_repositories=settings.allow_local_repositories,
-                hosted_mode=True,
-                plugin_dir=settings.plugin_dir,
-                model_paths=list(settings.model_paths) or None,
-                on_event=self.on_event,
-                lease_heartbeat=lambda active: lease.touch(),
-                repository_credentials=clone_credentials,
-                allowed_tool_secret_grants=tool_secret_grants,
-            )
-            result = runner.execute(job)
-            self._finalize_issue_turn(result)
-            self.outbox_processor.process_pending()
-            lease.check()
-            self._emit(
-                structured_event(
-                    "worker",
-                    "job_done",
-                    job_id=result.id,
-                    status=result.status.value,
-                    session_id=result.session_id,
-                    last_error=result.last_error,
-                )
-            )
-            return result
-=======
         try:
             with _LeaseKeeper(self.state, job) as lease:
                 runner = JobRunner(
@@ -216,6 +180,16 @@ class ServiceWorker:
                 self._finalize_issue_turn(result)
                 self.outbox_processor.process_pending()
                 lease.check()
+                self._emit(
+                    structured_event(
+                        "worker",
+                        "job_done",
+                        job_id=result.id,
+                        status=result.status.value,
+                        session_id=result.session_id,
+                        last_error=result.last_error,
+                    )
+                )
                 return result
         finally:
             with self._active_lock:
@@ -236,7 +210,6 @@ class ServiceWorker:
                 f"status={released.status.value}"
             )
         return released
->>>>>>> 21f756d (feat: reclaim worker leases on shutdown and via API (#48))
 
     def _emit(self, message: str) -> None:
         if self.on_event is not None:
