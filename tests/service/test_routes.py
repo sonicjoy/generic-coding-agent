@@ -387,7 +387,63 @@ def test_create_run_explicit_max_steps_overrides_service_default(tmp_path: Path)
 def test_health_and_readiness(tmp_path: Path) -> None:
     client = TestClient(create_app(_settings(tmp_path)))
     assert client.get("/health").json() == {"status": "ok"}
-    assert client.get("/ready").json() == {"status": "ready"}
+    response = client.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["worker"]["queued_count"] == 0
+
+
+def test_ready_fails_when_queued_jobs_have_no_recent_worker_claim(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-ready-fail",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        ready_worker_claim_timeout_seconds=1,
+    )
+    state = ServiceState.build(settings)
+    job = state.store.create(
+        RunSpec(
+            task="Queued work",
+            repository=RepositorySpec("https://example.test/owner/repo.git"),
+        )
+    )
+    state.queue.enqueue(job.id)
+    client = TestClient(create_app(state=state))
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "not_ready"
+    assert payload["worker"]["queued_count"] == 1
+    assert payload["worker"]["seconds_since_last_claim"] is None
+
+
+def test_ready_reports_recent_worker_claim(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-ready-worker",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"example.test", "github.com"}),
+        ready_worker_claim_timeout_seconds=60,
+    )
+    state = ServiceState.build(settings)
+    job = state.store.create(
+        RunSpec(
+            task="Queued work",
+            repository=RepositorySpec("https://example.test/owner/repo.git"),
+        )
+    )
+    state.queue.enqueue(job.id)
+    state.store.record_worker_heartbeat(settings.worker_id, claimed=True)
+    client = TestClient(create_app(state=state))
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["worker"]["worker_count"] == 1
+    assert payload["worker"]["queued_count"] == 1
+    assert payload["worker"]["seconds_since_last_claim"] is not None
 
 
 def test_runs_reject_malformed_types_and_oversized_body(tmp_path: Path) -> None:
