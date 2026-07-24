@@ -224,6 +224,21 @@ Jobs use isolated workspaces, SQLite-backed idempotency and leases, and the same
 resumable agent sessions. Hosted-mode jobs hide raw `run_command` unless the
 manifest explicitly exposes it; configure safe checks as fixed argv commands.
 
+### Step budget
+
+CLI runs, `POST /runs`, and `POST /runs/{id}/resume` all share the same
+maximum-step budget model. The effective budget is chosen in this order:
+
+1. An explicit request value: `--max-steps` for CLI/job commands, `max_steps` on
+   `POST /runs`, or a larger `max_steps` on resume.
+2. `GCA_DEFAULT_MAX_STEPS` for hosted service jobs submitted without an explicit
+   budget.
+3. The target repository's `.gca/config.yaml` `runtime.max_steps` value
+   (default `25`).
+4. For feature workflows, phase budgets consume the remaining total. The
+   implementation phase cannot spend the review reserve; configure that reserve
+   with `review_step_reserve` (default `5`).
+
 ## Repository manifest
 
 `.gca/config.yaml` is a strict, versioned manifest for settings that should be
@@ -562,11 +577,9 @@ still-active jobs linked to that PR (`pr_id` / publication URL / head ref) and
 wipes their workspaces/sessions. The worker process stays running for other
 jobs; only the matched job sessions are closed.
 
-Webhook and `POST /runs` submissions may omit `max_steps`. Set
-`GCA_DEFAULT_MAX_STEPS` (1..1000) on the service to apply a default budget to
-those jobs. Explicit `max_steps` on `/runs` (or resume) still wins. When neither
-is set, the worker uses the target repo's `.gca/config.yaml`
-`runtime.max_steps` (default 25).
+Webhook and `POST /runs` submissions may omit `max_steps`; see
+[Step budget](#step-budget) for the CLI/service precedence rules and resume
+requirements.
 
 When a feature-workflow run exhausts its step budget mid-flight, the job
 **pauses** (it does not fail) and no PR/MR is opened for an unfinished diff.
