@@ -165,9 +165,7 @@ def _usage_from_response(
     usage_raw = data.get("usage")
     cost_header = headers.get("x-openrouter-cost")
     generation_id = (
-        headers.get("x-openrouter-generation-id")
-        or headers.get("x-openrouter-id")
-        or ""
+        headers.get("x-openrouter-generation-id") or headers.get("x-openrouter-id") or ""
     )
     if not isinstance(usage_raw, dict) and not cost_header and not generation_id:
         return None

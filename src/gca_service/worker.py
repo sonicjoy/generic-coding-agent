@@ -206,8 +206,7 @@ class ServiceWorker:
         released = self.state.store.release_lease(job_id, self.state.settings.worker_id)
         if released is not None and self.on_event is not None:
             self.on_event(
-                f"[worker] event=lease_released job_id={released.id} "
-                f"status={released.status.value}"
+                f"[worker] event=lease_released job_id={released.id} status={released.status.value}"
             )
         return released
 
