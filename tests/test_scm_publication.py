@@ -18,12 +18,24 @@ class FakeAdapter:
     def __init__(self) -> None:
         self.pushed: list[str] = []
         self.requests: list[ChangeRequest] = []
+        self.linked: list[tuple[str, str, str]] = []
 
     def supports_repository(self, repository_url: str) -> bool:
         return True
 
     def push(self, workspace: Path, branch: str, repository_url: str) -> None:
         self.pushed.append(branch)
+
+    def link_branch_to_issue(
+        self,
+        repository_url: str,
+        branch: str,
+        issue_id: str,
+        oid: str,
+    ) -> bool:
+        _ = repository_url
+        self.linked.append((branch, issue_id, oid))
+        return True
 
     def open_change_request(self, request: ChangeRequest) -> str:
         self.requests.append(request)
@@ -127,6 +139,52 @@ def test_controller_can_push_branch_without_change_request(tmp_path: Path) -> No
     assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
     assert adapter.requests == []
     assert _git(repository, "log", "-1", "--pretty=%s") == "gca: Add a useful change"
+
+
+def test_controller_prepares_issue_working_branch(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    adapter = FakeAdapter()
+    job = _job(repository)
+    job.run_spec.labels["issue_id"] = "12"
+    job.run_spec.labels["source"] = "issues.labeled"
+
+    result = PublicationController({"fake": adapter}).prepare_working_branch(job, repository)
+
+    assert result is not None
+    assert result["branch"] == "gca/aaaaaaaaaaaa"
+    assert result["linked_issue"] is True
+    assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
+    assert adapter.linked == [("gca/aaaaaaaaaaaa", "12", result["commit_sha"])]
+    assert _git(repository, "branch", "--show-current") == "gca/aaaaaaaaaaaa"
+
+
+def test_controller_skips_working_branch_for_pr_review_jobs(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    adapter = FakeAdapter()
+    job = _job(repository)
+    job.run_spec.labels["issue_id"] = "43"
+    job.run_spec.labels["source"] = "pull_request_review.changes_requested"
+
+    result = PublicationController({"fake": adapter}).prepare_working_branch(job, repository)
+
+    assert result is None
+    assert adapter.pushed == []
+    assert adapter.linked == []
+
+
+def test_controller_skips_working_branch_without_issue_id(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    adapter = FakeAdapter()
+
+    result = PublicationController({"fake": adapter}).prepare_working_branch(
+        _job(repository),
+        repository,
+    )
+
+    assert result is None
+    assert adapter.pushed == []
+    assert adapter.linked == []
+    assert _git(repository, "branch", "--show-current") == "main"
 
 
 def test_publication_uses_issue_title_not_scm_framing(tmp_path: Path) -> None:

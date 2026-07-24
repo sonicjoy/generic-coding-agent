@@ -135,6 +135,14 @@ class ScmAdapter(Protocol):
 
     def open_change_request(self, request: ChangeRequest) -> str: ...
 
+    def link_branch_to_issue(
+        self,
+        repository_url: str,
+        branch: str,
+        issue_id: str,
+        oid: str,
+    ) -> bool: ...
+
 
 class PublicationController:
     """Validate, commit, push, and open a change request after agent success."""
@@ -180,16 +188,10 @@ class PublicationController:
         self._run_required_checks(job, workspace, repo_config, policy, executor=executor)
 
         branch = _branch_name(target.branch_prefix, job.id)
-        _git(workspace, ["check-ref-format", "--branch", branch], self.credentials)
-        base_ref = _existing_base_ref(workspace, target.base_ref, self.credentials)
-        branch_exists = _git_ok(
+        base_ref = _checkout_publication_branch(
             workspace,
-            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-            self.credentials,
-        )
-        _git(
-            workspace,
-            ["checkout", branch] if branch_exists else ["checkout", "-b", branch],
+            branch,
+            target.base_ref,
             self.credentials,
         )
         _git(workspace, ["add", "-A"], self.credentials)
@@ -251,6 +253,51 @@ class PublicationController:
             commit_sha=sha,
             change_request_url=url,
         ).to_dict()
+
+    def prepare_working_branch(self, job: Job, workspace: Path) -> dict[str, object] | None:
+        """Create and push the issue-linked working branch before the agent runs."""
+
+        target = job.run_spec.publication
+        labels = job.run_spec.labels
+        issue_id = str(labels.get("issue_id", "")).strip()
+        # Only labeled-issue jobs (not PR review /agent fix runs that also carry
+        # an issue/PR number under issue_id).
+        if target is None or not issue_id or labels.get("source") != "issues.labeled":
+            return None
+        adapter = self.adapters.get(target.provider)
+        if adapter is None:
+            raise PublicationError(f"no SCM adapter configured for provider: {target.provider}")
+        if not adapter.supports_repository(job.run_spec.repository.url):
+            raise PublicationError(f"{target.provider} adapter does not match repository host")
+        branch = _branch_name(target.branch_prefix, job.id)
+        # Create from the already-cloned HEAD; do not re-fetch publication.base_ref
+        # (shallow PR-head clones may not have that ref yet).
+        _git(workspace, ["check-ref-format", "--branch", branch], self.credentials)
+        if _git_ok(
+            workspace,
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            self.credentials,
+        ):
+            _git(workspace, ["checkout", branch], self.credentials)
+        else:
+            _git(workspace, ["checkout", "-b", branch], self.credentials)
+        oid = _git(workspace, ["rev-parse", "HEAD"], self.credentials).strip()
+        linked = False
+        try:
+            linked = adapter.link_branch_to_issue(
+                job.run_spec.repository.url,
+                branch,
+                issue_id,
+                oid,
+            )
+        except Exception:
+            linked = False
+        adapter.push(workspace, branch, job.run_spec.repository.url)
+        return {
+            "branch": branch,
+            "commit_sha": oid,
+            "linked_issue": linked,
+        }
 
     def _run_required_checks(
         self,
@@ -488,6 +535,27 @@ def _existing_base_ref(
     ):
         return remote
     raise PublicationError(f"publication base ref does not exist: {base}")
+
+
+def _checkout_publication_branch(
+    workspace: Path,
+    branch: str,
+    base: str,
+    credentials: CredentialBroker,
+) -> str:
+    _git(workspace, ["check-ref-format", "--branch", branch], credentials)
+    base_ref = _existing_base_ref(workspace, base, credentials)
+    branch_exists = _git_ok(
+        workspace,
+        ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        credentials,
+    )
+    _git(
+        workspace,
+        ["checkout", branch] if branch_exists else ["checkout", "-b", branch],
+        credentials,
+    )
+    return base_ref
 
 
 def _staged_diff(

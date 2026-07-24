@@ -54,6 +54,16 @@ class GitLabScmAdapter:
             token=self.token,
         )
 
+    def link_branch_to_issue(
+        self,
+        repository_url: str,
+        branch: str,
+        issue_id: str,
+        oid: str,
+    ) -> bool:
+        _ = repository_url, branch, issue_id, oid
+        return False
+
     def open_change_request(self, request: ChangeRequest) -> str:
         project = quote(repository_path(request.repository_url), safe="")
         headers = {"PRIVATE-TOKEN": self.token}
