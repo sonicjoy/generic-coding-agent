@@ -109,6 +109,8 @@ def test_lifecycle_sync_back_and_conditional_wipe(tmp_path: Path) -> None:
     assert (source / "keep.txt").read_text(encoding="utf-8") == "new\n"
     assert should_wipe_workspace("completed")
     assert not should_wipe_workspace("paused")
+    assert not should_wipe_workspace("failed")
+    assert not should_wipe_workspace("cancelled")
     lifecycle.cleanup(wipe_workspace=True)
     assert not lifecycle.workspace.exists()
     assert executor_cleaned(lifecycle)
