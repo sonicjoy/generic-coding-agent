@@ -258,3 +258,13 @@ class SessionStore:
             )
         summaries.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
         return summaries
+
+
+def implementation_artifact(session: Session) -> str | None:
+    """Return a non-empty implementation summary from the workflow, if any."""
+
+    workflow = session.workflow
+    if workflow is None:
+        return None
+    summary = str(workflow.artifacts.get("implementation") or "").strip()
+    return summary or None

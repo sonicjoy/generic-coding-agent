@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 
+from gca.text_escape import looks_json_over_escaped
+
 
 def validate_python_source(path: str, content: str) -> str | None:
     """Return an error message when ``content`` is invalid Python for ``path``.
@@ -29,13 +31,3 @@ def validate_python_source(path: str, content: str) -> str | None:
             )
         return f"syntax error in {path}: {detail}.{hint}".rstrip()
     return None
-
-
-def looks_json_over_escaped(content: str) -> bool:
-    """Return True when ``content`` appears to contain JSON-over-escaped quotes."""
-
-    return (
-        '\\"' in content
-        or content.lstrip().startswith('\\"""')
-        or content.lstrip().startswith("\\'''")
-    )

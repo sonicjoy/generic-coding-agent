@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any, Protocol
 
 from gca.credentials import CredentialBroker
 from gca.integrations.git_auth import push_with_token
+from gca.integrations.git_ops import run_git
 from gca.integrations.gitlab_events import neutralize_untrusted_markdown
 from gca.integrations.http import request_bytes, request_json
 from gca.integrations.scm import PublicationError, PublicationPolicy
@@ -538,22 +538,18 @@ def create_trusted_commit(
 
 
 def _git(cwd: Path, args: list[str], credentials: CredentialBroker) -> str:
-    env = credentials.subprocess_env("hosted")
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
-    result = subprocess.run(
-        ["git", "-c", "safe.directory=*", *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
+    def _error(detail: str) -> RuntimeError:
+        # run_git formats "$ git <args>\n<output>"; keep the historical outbox message.
+        output = detail.split("\n", 1)[-1]
+        return RuntimeError(f"git {' '.join(args)} failed: {output}")
+
+    return run_git(
+        cwd,
+        args,
+        credentials,
+        isolated_config=True,
+        error_factory=_error,
     )
-    output = credentials.redact((result.stdout or "") + (result.stderr or ""))
-    if result.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed: {output.strip()}")
-    return output
 
 
 def _safe_title(value: str) -> str:

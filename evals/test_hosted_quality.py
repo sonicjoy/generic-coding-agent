@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
+from tests.support.git_repo import run_git as _git
+from tests.support.scm import FakeScmAdapter
 
 from gca.integrations.scm import ChangeRequest, PublicationController
 from gca.jobs.models import JobStatus, PublicationTarget, RepositorySpec, RunSpec
@@ -18,18 +19,12 @@ from gca.providers.scripted import ScriptedProvider
 from gca.runtime import RuntimeConfig
 
 
-class RecordingAdapter:
-    provider = "fake"
+class RecordingAdapter(FakeScmAdapter):
+    """Like FakeScmAdapter but tracks pushes as ``branches`` and never links issues."""
 
     def __init__(self) -> None:
-        self.branches: list[str] = []
-        self.requests: list[ChangeRequest] = []
-
-    def supports_repository(self, repository_url: str) -> bool:
-        return True
-
-    def push(self, workspace: Path, branch: str, repository_url: str) -> None:
-        self.branches.append(branch)
+        super().__init__()
+        self.branches = self.pushed
 
     def link_branch_to_issue(
         self,
@@ -44,16 +39,6 @@ class RecordingAdapter:
     def open_change_request(self, request: ChangeRequest) -> str:
         self.requests.append(request)
         return "https://scm.example/changes/1"
-
-
-def _git(repository: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", *args],
-        cwd=repository,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
 
 
 @pytest.mark.eval

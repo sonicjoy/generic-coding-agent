@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from gca.integrations.github import GitHubScmAdapter
 from gca.integrations.http import IntegrationHttpError
 from gca.jobs.models import Job
 from gca_service.config import ServiceSettings
-
-EventSink = Callable[[str], None]
+from gca_service.events import EventSink
 
 
 def announce_github_issue_start(

@@ -115,15 +115,6 @@ def build_registry_with_extras(
     return registry
 
 
-def resolve_provider(config: RuntimeConfig, fallback: LLMProvider) -> LLMProvider:
-    """Use a provider supplied by a plugin if present, else the fallback."""
-
-    loaded = load_configured_plugins(config)
-    if loaded.provider is not None:
-        return loaded.provider
-    return fallback
-
-
 def load_configured_plugins(config: RuntimeConfig) -> LoadedPlugins:
     """Load plugins after applying repository and hosted-mode trust policy."""
 

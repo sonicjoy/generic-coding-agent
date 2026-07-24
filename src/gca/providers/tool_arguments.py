@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from gca.text_escape import looks_json_over_escaped
+
 
 def parse_tool_arguments(value: Any) -> dict[str, Any]:
     """Parse provider/session tool arguments into a plain dict.
@@ -37,21 +39,11 @@ def repair_over_escaped_argument_strings(arguments: dict[str, Any]) -> dict[str,
 
     repaired: dict[str, Any] = {}
     for key, value in arguments.items():
-        if isinstance(value, str) and _looks_json_over_escaped(value):
+        if isinstance(value, str) and looks_json_over_escaped(value):
             repaired[key] = _unescape_json_quotes(value)
         else:
             repaired[key] = value
     return repaired
-
-
-def _looks_json_over_escaped(content: str) -> bool:
-    """Return True when content appears to contain JSON-over-escaped quotes."""
-
-    return (
-        '\\"' in content
-        or content.lstrip().startswith('\\"""')
-        or content.lstrip().startswith("\\'''")
-    )
 
 
 def _unescape_json_quotes(value: str) -> str:

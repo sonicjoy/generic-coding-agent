@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from tests.support.http import FakeResponse
 
 from gca.providers import openai_compatible
 from gca.providers.base import Message
@@ -66,20 +67,8 @@ def test_openai_compatible_repairs_over_escaped_write_file_arguments(
         ]
     }
 
-    class FakeResponse:
-        headers: dict[str, str] = {}
-
-        def read(self, size: int = -1) -> bytes:
-            return json.dumps(payload).encode()
-
-        def __enter__(self) -> FakeResponse:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
     monkeypatch.setenv("TEST_API_KEY", "secret")
-    monkeypatch.setattr(openai_compatible, "_open_url", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(openai_compatible, "_open_url", lambda *a, **k: FakeResponse(payload))
     provider = OpenAICompatibleProvider(
         model_id="test-model",
         base_url="https://example.test/v1",

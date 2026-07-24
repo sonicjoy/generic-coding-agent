@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable
 from pathlib import Path
 
 from gca.agent import AgentResult
@@ -22,11 +21,9 @@ from gca.jobs.runner import JobRunner, RuntimeModelLoader
 from gca.jobs.store import JobConcurrencyError
 from gca.session import SessionStore
 from gca.workspace.prepare import repository_host
-from gca_service.events import structured_event
+from gca_service.events import EventSink, structured_event
 from gca_service.issue_progress import announce_github_issue_start
 from gca_service.state import ServiceState
-
-EventSink = Callable[[str], None]
 
 
 class _LeaseKeeper:
@@ -207,7 +204,12 @@ class ServiceWorker:
         released = self.state.store.release_lease(job_id, self.state.settings.worker_id)
         if released is not None and self.on_event is not None:
             self.on_event(
-                f"[worker] event=lease_released job_id={released.id} status={released.status.value}"
+                structured_event(
+                    "worker",
+                    "lease_released",
+                    job_id=released.id,
+                    status=released.status.value,
+                )
             )
         return released
 
