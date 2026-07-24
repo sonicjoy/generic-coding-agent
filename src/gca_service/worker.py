@@ -285,6 +285,7 @@ def _publisher(state: ServiceState) -> PublicationController | None:
         PublicationController(
             adapters,
             tool_secret_grants=state.settings.tool_secret_grants,
+            open_change_requests=settings.publish_mode != "branch",
         )
         if adapters
         else None

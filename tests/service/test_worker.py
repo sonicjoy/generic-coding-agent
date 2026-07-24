@@ -13,7 +13,7 @@ from gca.providers.scripted import ScriptedProvider
 from gca.runtime import RuntimeConfig
 from gca_service.config import ServiceSettings
 from gca_service.state import ServiceState
-from gca_service.worker import ServiceWorker, _LeaseKeeper
+from gca_service.worker import ServiceWorker, _LeaseKeeper, _publisher
 
 
 def _repository(tmp_path: Path) -> Path:
@@ -77,6 +77,20 @@ def test_worker_claims_and_completes_scripted_job(tmp_path: Path) -> None:
     assert any("event=claim" in event and job.id in event for event in events)
     assert any("event=job_done" in event and "status=completed" in event for event in events)
     assert any("event=phase" in event and "remaining=" in event for event in events)
+
+
+def test_worker_publisher_respects_branch_publish_mode(tmp_path: Path) -> None:
+    settings = ServiceSettings(
+        data_dir=tmp_path / "service-branch-publish",
+        api_token="api-token-123456",
+        allowed_repository_hosts=frozenset({"github.com"}),
+        github_token="github-token-for-tests",
+        publish_mode="branch",
+    )
+    publisher = _publisher(ServiceState.build(settings))
+
+    assert publisher is not None
+    assert publisher.open_change_requests is False
 
 
 def test_worker_periodically_renews_long_running_lease(tmp_path: Path) -> None:

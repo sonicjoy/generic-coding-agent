@@ -108,6 +108,27 @@ def test_controller_checks_commits_pushes_and_opens_change_request(tmp_path: Pat
     assert _git(repository, "log", "-1", "--pretty=%s") == "gca: Add a useful change"
 
 
+def test_controller_can_push_branch_without_change_request(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    source = repository / "src"
+    source.mkdir()
+    (source / "change.py").write_text("VALUE = 1\n", encoding="utf-8")
+    adapter = FakeAdapter()
+
+    result = PublicationController({"fake": adapter}, open_change_requests=False).publish(
+        _job(repository),
+        repository,
+        load_repo_config(repository),
+        executor=_executor(),
+    )
+
+    assert result["change_request_url"] is None
+    assert result["branch"] == "gca/aaaaaaaaaaaa"
+    assert adapter.pushed == ["gca/aaaaaaaaaaaa"]
+    assert adapter.requests == []
+    assert _git(repository, "log", "-1", "--pretty=%s") == "gca: Add a useful change"
+
+
 def test_publication_uses_issue_title_not_scm_framing(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     source = repository / "src"
