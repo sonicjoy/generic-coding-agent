@@ -17,7 +17,9 @@ from gca_service.worker import ServiceWorker
 
 def _serve(args: argparse.Namespace) -> int:
     settings = ServiceSettings.from_environment()
-    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level=args.log_level)
+    state = ServiceState.build(settings)
+    _emit(_startup_summary(settings, state))
+    uvicorn.run(create_app(state=state), host=args.host, port=args.port, log_level=args.log_level)
     return 0
 
 
@@ -49,6 +51,7 @@ def _worker(args: argparse.Namespace) -> int:
             data_dir=settings.data_dir,
         )
     )
+    _emit(_startup_summary(settings, state))
     worker = ServiceWorker(state, on_event=_emit)
     if args.once:
         job = worker.run_once()
@@ -89,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--once", action="store_true", help="Process at most one job.")
     worker.set_defaults(func=_worker)
     return parser
+
+
+def _startup_summary(settings: ServiceSettings, state: ServiceState) -> str:
+    latest = state.store.list(limit=1)
+    latest_job_id = latest[0].id if latest else "none"
+    return f"gca-service data_dir={settings.data_dir} latest_job_id={latest_job_id}"
 
 
 def main(argv: list[str] | None = None) -> int:

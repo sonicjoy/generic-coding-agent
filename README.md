@@ -699,6 +699,15 @@ docker compose up --build
 Without Compose, start the API first, wait for `GET /ready`, then start the
 worker. Store initialization also retries on `database is locked`.
 
+Job IDs live in the SQLite store under `GCA_DATA_DIR`. API and worker processes
+must point at the same durable directory across restarts; changing or losing that
+directory makes old `/runs/{id}` URLs return 404 even if another data directory
+still has the job. On startup, both processes log the configured data dir and
+newest job ID. Use authenticated `GET /runs/latest` to discover the newest run
+in the currently configured data dir, and compare the 404 hint when diagnosing a
+data-dir mismatch. A future hosted webhook e2e recipe can use this pointer when
+recovering from restarts.
+
 On a VM or container host, run the worker with:
 
 - `GCA_DATA_DIR` on durable storage

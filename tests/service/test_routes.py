@@ -11,6 +11,7 @@ from gca.jobs.lifecycle import transition_job
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
 from gca.session import SessionStore, WorkflowState
 from gca_service.app import create_app
+from gca_service.cli import _startup_summary
 from gca_service.config import ServiceSettings
 from gca_service.state import ServiceState
 
@@ -83,6 +84,67 @@ def test_get_run_includes_session_progress_fields(tmp_path: Path) -> None:
     assert payload["step_count"] == 7
     assert payload["workflow"] == {"phase": "implementation"}
     assert payload["session_status"] == "active"
+
+
+def test_latest_run_returns_newest_job(tmp_path: Path) -> None:
+    client = TestClient(create_app(_settings(tmp_path)))
+    headers = {"Authorization": "Bearer api-token-123456"}
+    first = client.post("/runs", json=_run_payload(), headers=headers)
+    second_payload = _run_payload()
+    second_payload["task"] = "Fix a different typo"
+    second = client.post("/runs", json=second_payload, headers=headers)
+
+    response = client.get("/runs/latest", headers=headers)
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert response.status_code == 200
+    assert response.json()["id"] == second.json()["id"]
+
+
+def test_missing_run_404_mentions_data_dir_and_latest_endpoint(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings))
+
+    response = client.get(
+        "/runs/missing-job",
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 404
+    payload = response.json()
+    assert "missing-job" in payload["error"]
+    assert str(settings.data_dir) in payload["hint"]
+    assert "GET /runs/latest" in payload["hint"]
+
+
+def test_latest_run_404_mentions_data_dir_when_store_is_empty(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings))
+
+    response = client.get(
+        "/runs/latest",
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 404
+    assert str(settings.data_dir) in response.json()["hint"]
+
+
+def test_startup_summary_logs_data_dir_and_newest_job(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    state = ServiceState.build(settings)
+    job = state.store.create(
+        RunSpec(
+            task="Remember this run",
+            repository=RepositorySpec("https://example.test/owner/repo.git"),
+        )
+    )
+
+    summary = _startup_summary(settings, state)
+
+    assert str(settings.data_dir) in summary
+    assert job.id in summary
 
 
 def test_run_can_be_cancelled_before_claim(tmp_path: Path) -> None:
