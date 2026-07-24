@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from gca.credentials import CredentialBroker
 from gca.executor.protocol import CommandExecutor
+from gca.integrations.git_ops import run_git
 from gca.integrations.repository import repository_identity
 from gca.jobs.models import Job
 from gca.repo_config import RepoConfig
@@ -42,12 +43,7 @@ class PublicationPolicy:
 
     required_checks: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ()
-    denied_paths: tuple[str, ...] = (
-        ".gca/config.yaml",
-        ".gca/sessions/**",
-        ".env",
-        ".gca/.env",
-    )
+    denied_paths: tuple[str, ...] = _CORE_DENIED_PATHS
     max_files: int = 100
     max_changed_lines: int = 5000
     commit_prefix: str = "gca"
@@ -77,10 +73,7 @@ class PublicationPolicy:
             required_checks=_strings(raw.get("required_checks", []), "required_checks"),
             allowed_paths=_strings(raw.get("allowed_paths", []), "allowed_paths"),
             denied_paths=_strings(
-                raw.get(
-                    "denied_paths",
-                    [".gca/config.yaml", ".gca/sessions/**", ".env", ".gca/.env"],
-                ),
+                raw.get("denied_paths", list(_CORE_DENIED_PATHS)),
                 "denied_paths",
             ),
             max_files=_positive_int(raw.get("max_files", 100), "max_files"),
@@ -460,20 +453,12 @@ def _git(
     args: list[str],
     credentials: CredentialBroker,
 ) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        shell=False,
-        cwd=workspace,
-        env=credentials.subprocess_env("hosted"),
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
+    return run_git(
+        workspace,
+        args,
+        credentials,
+        error_factory=lambda detail: PublicationError(detail),
     )
-    output = credentials.redact((result.stdout or "") + (result.stderr or ""))
-    if result.returncode != 0:
-        raise PublicationError(f"$ git {shlex.join(args)}\n{output.strip()}")
-    return output
 
 
 def _git_ok(

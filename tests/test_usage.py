@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+from tests.support.http import FakeResponse
 
 from gca.agent import Agent, AgentConfig
 from gca.providers import openai_compatible
@@ -13,27 +14,12 @@ from gca.tools.base import ToolContext
 from gca.usage import LLMUsage, merge_usage, totals_from_dict
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict[str, object], headers: dict[str, str]) -> None:
-        self._payload = json.dumps(payload).encode()
-        self.headers = headers
-
-    def read(self, size: int = -1) -> bytes:
-        return self._payload[:size] if size >= 0 else self._payload
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
-
-
 def test_openai_provider_captures_usage_and_openrouter_cost(monkeypatch: object) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", "secret")  # type: ignore[attr-defined]
 
-    def fake_open(request: object, timeout: object) -> _FakeResponse:
+    def fake_open(request: object, timeout: object) -> FakeResponse:
         _ = request, timeout
-        return _FakeResponse(
+        return FakeResponse(
             {
                 "choices": [{"message": {"content": "ok", "tool_calls": []}}],
                 "usage": {

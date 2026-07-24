@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import pytest
+from tests.support.http import FakeResponse
 
 from gca.model_config import (
     ModelConfigError,
@@ -143,20 +143,8 @@ def test_openai_compatible_parses_tool_calls(
         ]
     }
 
-    class FakeResponse:
-        headers: dict[str, str] = {}
-
-        def read(self, size: int = -1) -> bytes:
-            return json.dumps(payload).encode()
-
-        def __enter__(self) -> FakeResponse:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
     def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
-        return FakeResponse()
+        return FakeResponse(payload)
 
     monkeypatch.setenv("TEST_API_KEY", "secret")
     monkeypatch.setattr("gca.providers.openai_compatible._open_url", fake_urlopen)

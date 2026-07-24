@@ -382,7 +382,6 @@ __all__ = [
     "PatchError",
     "SearchReplaceTool",
     "apply_patch",
-    "normalize_diff_text",
     "parse_unified_diff",
     "patch_tools",
 ]

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
-from gca.agent import Agent, AgentConfig, AgentResult
+from gca.agent import Agent, AgentConfig, AgentResult, EventHook
 from gca.complexity import classify_task
 from gca.credentials import CredentialBroker
 from gca.executor.protocol import CommandExecutor
@@ -24,6 +23,7 @@ from gca.session import (
     Session,
     SessionStore,
     WorkflowState,
+    implementation_artifact,
 )
 from gca.tool_policy import registry_for_phase
 from gca.tools.base import ExecutionPolicy, ToolContext, ToolRegistry
@@ -34,8 +34,6 @@ from gca.workflows import (
     SubmitReviewTool,
     get_workflow,
 )
-
-EventHook = Callable[[str], None]
 
 # Steps held back from the implementation phase so review/publish can still run
 # within the same budget (or remain available after a mid-implementation pause).
@@ -348,7 +346,7 @@ class RunCoordinator:
                 # spend the held-back reserve instead of stranding a finished impl.
                 if (
                     phase == "review"
-                    and _implementation_artifact(session)
+                    and implementation_artifact(session)
                     and session.step_count < self.max_steps
                     and session.step_count > steps_before
                 ):
@@ -617,16 +615,6 @@ class RunCoordinator:
             session.workflow.artifacts["error"] = message
         store.save(session)
         return self._parent_result(session, message, outcome_kind="failed")
-
-
-def _implementation_artifact(session: Session) -> str | None:
-    """Return a non-empty implementation summary if the workflow recorded one."""
-
-    workflow = session.workflow
-    if workflow is None:
-        return None
-    summary = str(workflow.artifacts.get("implementation") or "").strip()
-    return summary or None
 
 
 def _finish_arguments(record: AgentRunRecord) -> dict[str, object]:

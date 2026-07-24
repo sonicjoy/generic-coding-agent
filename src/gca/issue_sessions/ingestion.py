@@ -55,13 +55,6 @@ class StaticMembershipChecker(MembershipChecker):
         return self.levels.get((project_id, user_id))
 
 
-class EnvTokenMembershipChecker(MembershipChecker):
-    """Best-effort membership checker; defaults to configured allowlist only."""
-
-    def access_level(self, *, project_id: int, user_id: int) -> int | None:
-        return None
-
-
 class IssueSessionIngestor:
     """Persist webhook events and schedule turns transactionally."""
 
@@ -74,7 +67,7 @@ class IssueSessionIngestor:
         generation_max_steps: int = 100,
     ) -> None:
         self.store = store
-        self.membership = membership or EnvTokenMembershipChecker()
+        self.membership = membership or StaticMembershipChecker()
         self.turn_max_steps = turn_max_steps
         self.generation_max_steps = generation_max_steps
 
@@ -202,7 +195,7 @@ class IssueSessionIngestor:
                 lease_epoch=generation.lease_epoch,
             )
         )
-        task = _issue_task(event.issue_title, event.issue_description)
+        task = issue_task(event.issue_title, event.issue_description)
         job = uow.create_turn_job(
             turn=turn,
             session=session,
@@ -632,10 +625,6 @@ class IssueSessionIngestor:
                 "received_at": utc_now(),
             },
         )
-
-
-def _issue_task(title: str, description: str) -> str:
-    return issue_task(title, description)
 
 
 def _follow_up_task(

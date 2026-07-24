@@ -1,56 +1,16 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
+from tests.support.git_repo import run_git as _git
+from tests.support.scm import FakeScmAdapter as FakeAdapter
 
 from gca.executor.fake import FakeExecutor
 from gca.executor.protocol import CommandResult
-from gca.integrations.scm import ChangeRequest, PublicationController, PublicationError
+from gca.integrations.scm import PublicationController, PublicationError
 from gca.jobs.models import Job, PublicationTarget, RepositorySpec, RunSpec
 from gca.repo_config import load_repo_config
-
-
-class FakeAdapter:
-    provider = "fake"
-
-    def __init__(self) -> None:
-        self.pushed: list[str] = []
-        self.requests: list[ChangeRequest] = []
-        self.linked: list[tuple[str, str, str]] = []
-
-    def supports_repository(self, repository_url: str) -> bool:
-        return True
-
-    def push(self, workspace: Path, branch: str, repository_url: str) -> None:
-        self.pushed.append(branch)
-
-    def link_branch_to_issue(
-        self,
-        repository_url: str,
-        branch: str,
-        issue_id: str,
-        oid: str,
-    ) -> bool:
-        _ = repository_url
-        self.linked.append((branch, issue_id, oid))
-        return True
-
-    def open_change_request(self, request: ChangeRequest) -> str:
-        self.requests.append(request)
-        return "https://scm.example/change/1"
-
-
-def _git(workspace: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
 
 
 def _repository(tmp_path: Path) -> Path:
