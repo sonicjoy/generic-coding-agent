@@ -67,6 +67,8 @@ def test_openai_compatible_repairs_over_escaped_write_file_arguments(
     }
 
     class FakeResponse:
+        headers: dict[str, str] = {}
+
         def read(self, size: int = -1) -> bytes:
             return json.dumps(payload).encode()
 
