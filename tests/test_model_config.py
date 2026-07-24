@@ -144,6 +144,8 @@ def test_openai_compatible_parses_tool_calls(
     }
 
     class FakeResponse:
+        headers: dict[str, str] = {}
+
         def read(self, size: int = -1) -> bytes:
             return json.dumps(payload).encode()
 
