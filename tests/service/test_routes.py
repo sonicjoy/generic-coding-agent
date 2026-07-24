@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 
 from gca.jobs.lifecycle import transition_job
 from gca.jobs.models import JobStatus, RepositorySpec, RunSpec
+from gca.session import SessionStore, WorkflowState
 from gca_service.app import create_app
 from gca_service.config import ServiceSettings
 from gca_service.state import ServiceState
@@ -50,6 +51,38 @@ def test_runs_require_auth_and_are_idempotent(tmp_path: Path) -> None:
     status = client.get(f"/runs/{first.json()['id']}", headers=headers)
     assert status.status_code == 200
     assert status.json()["status"] == "queued"
+
+
+def test_get_run_includes_session_progress_fields(tmp_path: Path) -> None:
+    state = ServiceState.build(_settings(tmp_path))
+    job = state.store.create(
+        RunSpec(
+            task="Make progress",
+            repository=RepositorySpec("https://example.test/owner/repo.git"),
+        )
+    )
+    workspace = state.settings.workspace_root / job.id
+    sessions = SessionStore(workspace / "sessions")
+    session = sessions.create(job.run_spec.task)
+    session.step_count = 7
+    session.status = "active"
+    session.workflow = WorkflowState(name="feature", phase="implementation")
+    sessions.save(session)
+    job.workspace_path = str(workspace / "repo")
+    job.session_id = session.id
+    state.store.save(job)
+    client = TestClient(create_app(state=state))
+
+    response = client.get(
+        f"/runs/{job.id}",
+        headers={"Authorization": "Bearer api-token-123456"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["step_count"] == 7
+    assert payload["workflow"] == {"phase": "implementation"}
+    assert payload["session_status"] == "active"
 
 
 def test_run_can_be_cancelled_before_claim(tmp_path: Path) -> None:

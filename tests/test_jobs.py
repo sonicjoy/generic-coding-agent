@@ -234,3 +234,24 @@ def test_regular_save_does_not_shorten_periodically_renewed_lease(tmp_path: Path
     store.save(claimed)
 
     assert _lease_expiration(store, claimed.id) == renewed
+
+
+def test_touch_lease_refreshes_updated_at_without_bumping_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SqliteJobStore(tmp_path / "jobs.sqlite3")
+    queue = SqliteJobQueue(store)
+    created = store.create(_spec())
+    queue.enqueue(created.id)
+    claimed = queue.claim("worker", lease_seconds=10)
+    assert claimed is not None
+    version = claimed.version
+
+    monkeypatch.setattr("gca.jobs.store.utc_now", lambda: "2099-01-01T00:00:00+00:00")
+    store.touch_lease(claimed.id, "worker", lease_seconds=100)
+
+    reloaded = store.load(claimed.id)
+    assert reloaded.updated_at == "2099-01-01T00:00:00+00:00"
+    assert reloaded.version == version
+    assert _lease_expiration(store, claimed.id) > claimed.lease_expires_at
