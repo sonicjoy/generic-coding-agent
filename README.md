@@ -624,6 +624,14 @@ export GCA_TOOL_SECRET_GRANTS='{
 The built-in controls isolate **target-repo commands** in Docker containers
 (with CPU/memory limits and workspace bind mounts). Deploy the GCA worker with
 access to a Docker Engine (typically by mounting `/var/run/docker.sock`).
+Isolation containers default to `network: false` so repository-controlled
+commands cannot make outbound network calls. Enable `environment.network: true`
+in the target repo's `.gca/config.yaml` only when trusted fixed commands need
+network access, such as downloading private package dependencies or contacting a
+test-only service. Treat this as a trust boundary change: commands running in
+that repository can exfiltrate workspace data or use any granted tool secrets,
+so prefer prebuilt `Dockerfile.agent` images, vendored dependencies, or narrowly
+scoped test credentials before enabling it.
 Monitoring / anomaly detection stays outside core and can create an SCM issue
 or call `POST /runs`. The worker's retention janitor also prunes stale per-run
 isolation images (`gca/<run-id>:run`) after the workspace retention window; the
