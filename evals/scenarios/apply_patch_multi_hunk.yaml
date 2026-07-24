@@ -1,0 +1,39 @@
+id: apply_patch_multi_hunk
+description: Fast workflow successfully applies a multi-hunk unified diff.
+task: Update values in numbers.py with a multi-hunk patch
+workflow: fast
+max_steps: 5
+initial_files:
+  numbers.py: |
+    a = 1
+    b = 2
+    c = 3
+    d = 4
+scripts:
+  strong: []
+  fast:
+    - tool_calls:
+        - name: apply_patch
+          arguments:
+            diff: |
+              --- a/numbers.py
+              +++ b/numbers.py
+              @@ -1,2 +1,2 @@
+              -a = 1
+              +a = 10
+               b = 2
+              @@ -3,2 +3,2 @@
+               c = 3
+              -d = 4
+              +d = 40
+    - tool_calls:
+        - name: finish
+          arguments:
+            summary: Updated a and d via multi-hunk apply_patch.
+expect:
+  status: completed
+  workflow: fast
+  files:
+    numbers.py:
+      contains: "a = 10\nb = 2\nc = 3\nd = 40\n"
+  final_contains: multi-hunk
