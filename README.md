@@ -573,9 +573,14 @@ missing (the error names `GCA_GITHUB_TOKEN` / `GCA_GITLAB_TOKEN`). Set
 `GCA_PUBLISH_MODE=off` to strip publication and run without opening a PR/MR.
 These tokens also provide temporary askpass credentials for private HTTPS
 clones on `GCA_GITHUB_HOST` / `GCA_GITLAB_HOST`; they are never passed to the
-agent subprocess. The worker—not the LLM—runs required fixed checks, enforces
-the repository's `publication` limits, commits, pushes a deterministic branch,
-and opens an idempotent PR/MR:
+agent subprocess. The askpass helper matches hosts via a Python regex over the
+Git prompt (including embedded-username forms such as
+`Password for 'https://x-access-token@github.com'`). Keep that helper as a
+plain Python string—do not over-escape `\s` in the source—or pushes fail with
+`credential prompt host mismatch`. CI runs `tests/test_git_credentials.py` on
+every PR to prevent that regression. The worker—not the LLM—runs required
+fixed checks, enforces the repository's `publication` limits, commits, pushes
+a deterministic branch, and opens an idempotent PR/MR:
 
 ```yaml
 publication:
