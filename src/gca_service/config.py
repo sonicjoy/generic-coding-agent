@@ -57,6 +57,9 @@ class ServiceSettings:
     bot_user_id: int | None = None
     membership_access_levels: dict[tuple[int, int], int] = field(default_factory=dict)
     default_max_steps: int | None = None
+    github_issue_assign: bool = False
+    github_issue_progress_comments: bool = False
+    github_bot_user: str = ""
 
     @property
     def database_path(self) -> Path:
@@ -131,6 +134,11 @@ class ServiceSettings:
                 values.get("GCA_GITLAB_MEMBERSHIP_LEVELS", "")
             ),
             default_max_steps=_optional_max_steps(values.get("GCA_DEFAULT_MAX_STEPS")),
+            github_issue_assign=_boolean(values.get("GCA_GITHUB_ISSUE_ASSIGN", "false")),
+            github_issue_progress_comments=_boolean(
+                values.get("GCA_GITHUB_ISSUE_PROGRESS_COMMENTS", "false")
+            ),
+            github_bot_user=values.get("GCA_GITHUB_BOT_USER", "").strip(),
         )
         settings.validate()
         return settings

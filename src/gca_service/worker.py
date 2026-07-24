@@ -23,6 +23,7 @@ from gca.jobs.store import JobConcurrencyError
 from gca.session import SessionStore
 from gca.workspace.prepare import repository_host
 from gca_service.events import structured_event
+from gca_service.issue_progress import announce_github_issue_start
 from gca_service.state import ServiceState
 
 EventSink = Callable[[str], None]
@@ -151,6 +152,8 @@ class ServiceWorker:
             )
         except ValueError:
             tool_secret_grants = {}
+
+        announce_github_issue_start(job, settings, on_event=self.on_event)
 
         with _LeaseKeeper(self.state, job) as lease:
             runner = JobRunner(
