@@ -130,6 +130,8 @@ def job_payload(job: Job) -> dict[str, Any]:
         "tokens_in": int(usage.get("prompt_tokens", 0) or 0),
         "tokens_out": int(usage.get("completion_tokens", 0) or 0),
         "cost_usd": float(usage.get("cost_usd", 0) or 0),
+        "lease_owner": job.lease_owner,
+        "lease_expires_at": job.lease_expires_at,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
