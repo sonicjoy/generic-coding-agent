@@ -68,11 +68,15 @@ def test_worker_claims_and_completes_scripted_job(tmp_path: Path) -> None:
         loaded.models.register(ModelProfile("scripted", provider, speed=5, cost=1))
         return loaded
 
-    result = ServiceWorker(state, model_loader=load_models).run_once()
+    events: list[str] = []
+    result = ServiceWorker(state, on_event=events.append, model_loader=load_models).run_once()
 
     assert result is not None
     assert result.status == JobStatus.COMPLETED, result.last_error
     assert state.store.load(job.id).status == JobStatus.COMPLETED
+    assert any("event=claim" in event and job.id in event for event in events)
+    assert any("event=job_done" in event and "status=completed" in event for event in events)
+    assert any("event=phase" in event and "remaining=" in event for event in events)
 
 
 def test_worker_periodically_renews_long_running_lease(tmp_path: Path) -> None:

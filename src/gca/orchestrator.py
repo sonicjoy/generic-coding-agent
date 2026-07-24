@@ -178,8 +178,9 @@ class RunCoordinator:
         store.save(session)
         binding_text = ", ".join(f"{role}={name}" for role, name in sorted(bindings.items()))
         self._emit(
-            f"[routing] workflow={workflow_name} complexity={assessment.level} "
-            f"score={assessment.score} models={binding_text}"
+            f"[routing] event=workflow workflow={workflow_name} "
+            f"complexity={assessment.level} score={assessment.score} "
+            f"max_steps={self.max_steps} models={binding_text}"
         )
 
     def _bind_models(self, workflow_name: str, complexity: str) -> dict[str, str]:
@@ -284,7 +285,11 @@ class RunCoordinator:
         if not session.messages:
             session.messages.append(Message(role="system", content=self.system_prompt))
             session.messages.append(Message(role="user", content=session.task))
-        self._emit(f"[routing] phase=execute model={model_name}")
+        remaining = max(0, self.max_steps - session.step_count)
+        self._emit(
+            f"[routing] event=phase phase=execute model={model_name} "
+            f"steps={session.step_count} max_steps={self.max_steps} remaining={remaining}"
+        )
         registry = self._phase_tools("execute", workflow=workflow.name)
         result = Agent(
             provider=self._provider_for_role(
@@ -318,7 +323,11 @@ class RunCoordinator:
             )
             model_name = workflow.model_bindings[spec.model_role]
             profile = self._model(model_name)
-            self._emit(f"[routing] phase={phase} model={model_name}")
+            remaining = max(0, self.max_steps - session.step_count)
+            self._emit(
+                f"[routing] event=phase phase={phase} model={model_name} "
+                f"steps={session.step_count} max_steps={self.max_steps} remaining={remaining}"
+            )
             session.status = STATUS_ACTIVE
             steps_before = session.step_count
             result, record = self._run_phase(
