@@ -86,15 +86,18 @@ gca job resume <job_id> --max-steps 80 --allowed-host git.example.com
 
 ### Step budget
 
-Effective max steps (highest wins first):
+Effective max steps:
 
 1. Explicit `--max-steps` / `max_steps` on `POST /runs` or resume
 2. `GCA_DEFAULT_MAX_STEPS` (hosted, when omitted)
 3. Repo `.gca/config.yaml` `runtime.max_steps` (default `25`)
-4. Feature workflows reserve review steps (`review_step_reserve`, default `5`)
 
-Mid-run budget exhaustion **pauses** the job (no publish of unfinished
-implementation). Resume with a larger `max_steps` or an authorized `/agent fix`.
+Feature workflows split the remaining budget across phases and hold back
+`review_step_reserve` (default `5`) so review can still run. Mid-run budget
+exhaustion **pauses** the job: unfinished mid-implementation work is not
+published; if implementation already finished and publication is configured, a
+**draft** change request may still open. Resume with a larger `max_steps` or
+an authorized `/agent fix`.
 
 ## Repository manifest
 
@@ -253,9 +256,11 @@ same durable `GCA_DATA_DIR`; startup logs the data dir and newest job id.
 
 - **GitHub**: `GCA_GITHUB_WEBHOOK_SECRET` + `GCA_ALLOWED_GITHUB_PROJECTS`.
   Issue jobs enqueue when a maintainer applies `gca-run`
-  (`GCA_GITHUB_TRIGGER_LABEL`). PR review / `/agent fix` and merged-PR cancel
-  behavior are supported — see webhook event notes in
-  `examples/service.env.example`.
+  (`GCA_GITHUB_TRIGGER_LABEL`). Also enqueue for PR
+  `pull_request_review` (`changes_requested`) or review/comment bodies with a
+  `/agent fix` line (clone PR head, publish against base). A merged
+  `pull_request` closed event cancels matching active jobs and wipes their
+  workspaces.
 - **Opt-in issue UX**: `GCA_GITHUB_ISSUE_ASSIGN` /
   `GCA_GITHUB_ISSUE_PROGRESS_COMMENTS` (needs `issues:write`).
 - **Early branch**: labeled GitHub issue jobs create and push a working branch
